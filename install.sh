@@ -136,6 +136,161 @@ start_ollama() {
     exit 1
 }
 
+install_launchagent() {
+    local plist="$HOME/Library/LaunchAgents/com.localai.ollama.plist"
+    if [[ -f "$plist" ]]; then
+        log "Ollama LaunchAgent already configured"
+        return
+    fi
+    if $DRY_RUN; then dry "install LaunchAgent for Ollama auto-start on login"; return; fi
+    info "Installing Ollama LaunchAgent (auto-start on login)..."
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.localai.ollama</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$HOME/Applications/Ollama.app/Contents/Resources/ollama</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$HOME/.ollama/logs/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>$HOME/.ollama/logs/server.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OLLAMA_FLASH_ATTENTION</key>
+        <string>1</string>
+        <key>OLLAMA_KV_CACHE_TYPE</key>
+        <string>q8_0</string>
+    </dict>
+</dict>
+</plist>
+EOF
+    mkdir -p "$HOME/.ollama/logs"
+    launchctl load "$plist"
+    log "Ollama will auto-start on login"
+}
+
+# ─── Test Command ─────────────────────────────────────────────────────────────
+
+cmd_test() {
+    header
+    info "Running inference smoke tests..."
+    echo ""
+
+    local failures=0
+
+    # Check Ollama is running
+    if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
+        err "Ollama is not running. Start with: ollama serve"
+        exit 1
+    fi
+
+    # Get installed models
+    local models
+    models=$(curl -s http://localhost:11434/api/tags | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('models', []):
+    print(m['name'])
+" 2>/dev/null)
+
+    # Test completion model
+    local completion_model
+    completion_model=$(echo "$models" | grep "qwen2.5-coder" | grep -E "1\.5b|3b" | head -1)
+    if [[ -n "$completion_model" ]]; then
+        info "Testing completion model: $completion_model"
+        local result
+        result=$(curl -s http://localhost:11434/api/generate \
+            -d "{\"model\":\"$completion_model\",\"prompt\":\"def quicksort(arr):\\n    \",\"stream\":false}" 2>/dev/null)
+        local tokens duration speed
+        tokens=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('eval_count',0))" 2>/dev/null)
+        duration=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(f\"{r.get('eval_duration',0)/1e9:.2f}\")" 2>/dev/null)
+        speed=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); c=r.get('eval_count',0); d=r.get('eval_duration',1)/1e9; print(f\"{c/d:.1f}\")" 2>/dev/null)
+        if [[ "$tokens" -gt 0 ]] 2>/dev/null; then
+            log "Completion: ${tokens} tokens in ${duration}s (${speed} tok/s)"
+            if (( $(echo "$speed < 20" | bc -l) )); then
+                warn "  Speed below 20 tok/s — autocomplete may feel sluggish"
+            fi
+        else
+            err "Completion model failed to generate"
+            failures=$((failures + 1))
+        fi
+    else
+        warn "No completion model found"
+        failures=$((failures + 1))
+    fi
+
+    echo ""
+
+    # Test chat model
+    local chat_model
+    chat_model=$(echo "$models" | grep "qwen2.5-coder" | grep -E "7b|14b|32b" | head -1)
+    if [[ -n "$chat_model" ]]; then
+        info "Testing chat model: $chat_model"
+        local result
+        result=$(curl -s http://localhost:11434/api/generate \
+            -d "{\"model\":\"$chat_model\",\"prompt\":\"In one sentence, what does malloc() do in C?\",\"stream\":false}" 2>/dev/null)
+        local tokens duration speed response
+        tokens=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('eval_count',0))" 2>/dev/null)
+        duration=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(f\"{r.get('eval_duration',0)/1e9:.2f}\")" 2>/dev/null)
+        speed=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); c=r.get('eval_count',0); d=r.get('eval_duration',1)/1e9; print(f\"{c/d:.1f}\")" 2>/dev/null)
+        response=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('response','')[:100])" 2>/dev/null)
+        if [[ "$tokens" -gt 0 ]] 2>/dev/null; then
+            log "Chat: ${tokens} tokens in ${duration}s (${speed} tok/s)"
+            echo -e "    ${DIM}\"${response}...\"${NC}"
+        else
+            err "Chat model failed to generate"
+            failures=$((failures + 1))
+        fi
+    else
+        warn "No chat model found"
+        failures=$((failures + 1))
+    fi
+
+    echo ""
+
+    # Test embedding model
+    local embed_model
+    embed_model=$(echo "$models" | grep "nomic-embed\|mxbai-embed\|all-minilm" | head -1)
+    if [[ -n "$embed_model" ]]; then
+        info "Testing embedding model: $embed_model"
+        local result
+        result=$(curl -s http://localhost:11434/api/embed \
+            -d "{\"model\":\"$embed_model\",\"input\":\"test embedding generation\"}" 2>/dev/null)
+        local dims
+        dims=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(len(r.get('embeddings',[[]])[0]))" 2>/dev/null)
+        if [[ "$dims" -gt 0 ]] 2>/dev/null; then
+            log "Embeddings: ${dims} dimensions — codebase indexing will work"
+        else
+            err "Embedding model failed"
+            failures=$((failures + 1))
+        fi
+    else
+        warn "No embedding model found"
+        failures=$((failures + 1))
+    fi
+
+    echo ""
+
+    # Summary
+    if [[ $failures -eq 0 ]]; then
+        echo -e "${GREEN}${BOLD}  ✓ All tests passed. Your local AI is ready.${NC}"
+    else
+        echo -e "${RED}${BOLD}  ✗ ${failures} test(s) failed.${NC}"
+        exit 1
+    fi
+}
+
 pull_models() {
     echo ""
     if $DRY_RUN; then
@@ -222,7 +377,7 @@ configure_continue() {
         dry "  chat model: ${CHAT_MODEL}"
         dry "  completion model: ${COMPLETION_MODEL}"
         dry "  embedding model: ${EMBED_MODEL}"
-        dry "  telemetry: disabled"
+        dry "  telemetry: disabled (VS Code setting)"
         dry "  codebase indexing: enabled"
         return
     fi
@@ -230,28 +385,41 @@ configure_continue() {
     mkdir -p "$CONTINUE_DIR"
     info "Configuring Continue.dev for local-only operation..."
 
-    cat > "$CONTINUE_DIR/config.yaml" << 'YAML'
-# LocalAIbundle — Continue.dev Configuration
+    cat > "$CONTINUE_DIR/config.yaml" << YAML
+# LocalAIbundle — Continue.dev Configuration (v1.2.x YAML format)
 # All models run locally via Ollama. No cloud connections.
 
 name: LocalAIbundle
 version: "1.0"
 
 models:
-  - name: Local Chat (Qwen2.5-Coder)
+  - name: Chat (${CHAT_MODEL})
     provider: ollama
-    model: CHAT_MODEL_PLACEHOLDER
+    model: ${CHAT_MODEL}
+    apiBase: http://localhost:11434
     roles:
       - chat
       - edit
-    apiBase: http://localhost:11434
+    defaultCompletionOptions:
+      contextLength: 32768
+      maxTokens: 4096
 
-  - name: Local Completion (Qwen2.5-Coder)
+  - name: Autocomplete (${COMPLETION_MODEL})
     provider: ollama
-    model: COMPLETION_MODEL_PLACEHOLDER
+    model: ${COMPLETION_MODEL}
+    apiBase: http://localhost:11434
     roles:
       - autocomplete
+    defaultCompletionOptions:
+      contextLength: 4096
+      maxTokens: 256
+
+  - name: Embeddings (${EMBED_MODEL})
+    provider: ollama
+    model: ${EMBED_MODEL}
     apiBase: http://localhost:11434
+    roles:
+      - embed
 
 context:
   - provider: codebase
@@ -270,28 +438,21 @@ context:
 
   - provider: open
 
-embeddingsProvider:
-  provider: ollama
-  model: EMBED_MODEL_PLACEHOLDER
-  apiBase: http://localhost:11434
-
-tabAutocompleteOptions:
-  debounceDelay: 300
-  maxPromptTokens: 2048
-  disableInFiles:
-    - "*.md"
-    - "*.txt"
-    - "*.log"
-
 docs: []
-
-allowAnonymousTelemetry: false
 YAML
 
-    # Replace model placeholders with actual selections
-    sed -i '' "s|CHAT_MODEL_PLACEHOLDER|${CHAT_MODEL}|g" "$CONTINUE_DIR/config.yaml"
-    sed -i '' "s|COMPLETION_MODEL_PLACEHOLDER|${COMPLETION_MODEL}|g" "$CONTINUE_DIR/config.yaml"
-    sed -i '' "s|EMBED_MODEL_PLACEHOLDER|${EMBED_MODEL}|g" "$CONTINUE_DIR/config.yaml"
+    # Disable telemetry via VS Code settings
+    local vscode_settings="$HOME/Library/Application Support/Code/User/settings.json"
+    if [[ -f "$vscode_settings" ]]; then
+        # Add continue telemetry setting if not present
+        if ! grep -q "continue.telemetryEnabled" "$vscode_settings"; then
+            # Insert before the last closing brace
+            sed -i '' '$ s/}$/,\n  "continue.telemetryEnabled": false\n}/' "$vscode_settings"
+        fi
+    else
+        mkdir -p "$(dirname "$vscode_settings")"
+        echo '{ "continue.telemetryEnabled": false }' > "$vscode_settings"
+    fi
 
     log "Continue.dev configured at $CONTINUE_DIR/config.yaml"
 }
@@ -453,7 +614,8 @@ cmd_status() {
 cmd_uninstall() {
     header
     warn "This will remove:"
-    echo "    - Ollama and all downloaded models"
+    echo "    - Ollama app and all downloaded models (~11GB)"
+    echo "    - Ollama LaunchAgent (auto-start)"
     echo "    - Continue.dev VS Code extension"
     echo "    - Continue.dev configuration"
     echo ""
@@ -472,13 +634,23 @@ cmd_uninstall() {
     rm -rf "$HOME/.continue"
 
     info "Stopping Ollama..."
-    pkill -f "ollama serve" 2>/dev/null || true
+    pkill -f "ollama" 2>/dev/null || true
 
-    info "Removing Ollama..."
-    brew uninstall ollama 2>/dev/null || true
+    info "Removing Ollama LaunchAgent..."
+    local plist="$HOME/Library/LaunchAgents/com.localai.ollama.plist"
+    if [[ -f "$plist" ]]; then
+        launchctl unload "$plist" 2>/dev/null || true
+        rm -f "$plist"
+    fi
+
+    info "Removing Ollama app..."
+    rm -rf "$HOME/Applications/Ollama.app"
+    rm -f /opt/homebrew/bin/ollama
+
+    info "Removing Ollama models and data..."
     rm -rf "$HOME/.ollama"
 
-    log "Uninstall complete."
+    log "Uninstall complete. All LocalAIbundle components removed."
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -493,6 +665,7 @@ main() {
 
     install_homebrew
     install_ollama
+    install_launchagent
     start_ollama
     pull_models
 
@@ -545,6 +718,7 @@ CMD="${1:-install}"
 case "$CMD" in
     install)  main ;;
     status)   cmd_status ;;
+    test)     cmd_test ;;
     uninstall) cmd_uninstall ;;
     --version|-v) echo "LocalAIbundle v${VERSION}" ;;
     --help|-h)
@@ -555,6 +729,7 @@ case "$CMD" in
         echo "Commands:"
         echo "  install     Install and configure everything (default)"
         echo "  status      Check current installation status"
+        echo "  test        Run inference smoke tests (speed + correctness)"
         echo "  uninstall   Remove all components"
         echo "  --version   Show version"
         echo "  --help      Show this help"
