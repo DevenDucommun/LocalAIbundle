@@ -7,6 +7,34 @@ set -euo pipefail
 
 VERSION="1.0.0"
 DRY_RUN=false
+PROFILE="auto"
+INSTALL_VSCODE=true
+INSTALL_CONTINUE=true
+INSTALL_OLLAMA=true
+INSTALL_LAUNCHAGENT=true
+START_OLLAMA=true
+PULL_MODEL_FILES=true
+WRITE_CONFIG=true
+PRESERVE_MODELS=false
+OFFLINE_BUNDLE=""
+BUNDLE_OUTPUT=""
+REPORT_DIR="${LOCALAIBUNDLE_REPORT_DIR:-$HOME/.localaibundle}"
+REPORT_FILE=""
+MODEL_TIER=""
+COMPLETION_MODEL=""
+CHAT_MODEL=""
+EMBED_MODEL=""
+COMPLETION_MODEL_OVERRIDE=""
+CHAT_MODEL_OVERRIDE=""
+EMBED_MODEL_OVERRIDE=""
+COMPLETION_MODEL_SIZE=""
+CHAT_MODEL_SIZE=""
+EMBED_MODEL_SIZE="~274MB"
+TOTAL_MODEL_SIZE=""
+RAM_GB=0
+CPU_BRAND=""
+GPU_CORES=""
+ARCH=""
 BOLD='\033[1m'
 DIM='\033[2m'
 GREEN='\033[0;32m'
@@ -20,6 +48,143 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1" >&2; }
 info() { echo -e "${BLUE}[→]${NC} $1"; }
 dry()  { echo -e "${DIM}[dry-run]${NC} would: $1"; }
+
+timestamp() {
+    date +"%Y%m%d%H%M%S"
+}
+
+backup_file() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        local backup
+        backup="${file}.bak.$(timestamp)"
+        cp "$file" "$backup"
+        log "Backed up existing $(basename "$file") to $backup"
+    fi
+}
+
+configure_homebrew_path() {
+    if command -v brew &>/dev/null; then
+        return
+    fi
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    fi
+}
+
+resolve_ollama_binary() {
+    if command -v ollama &>/dev/null; then
+        command -v ollama
+        return 0
+    fi
+
+    local candidate
+    for candidate in \
+        "$HOME/Applications/Ollama.app/Contents/Resources/ollama" \
+        "/Applications/Ollama.app/Contents/Resources/ollama" \
+        "/opt/homebrew/bin/ollama"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+model_size() {
+    case "$1" in
+        qwen2.5-coder:1.5b) echo "~986MB" ;;
+        qwen2.5-coder:3b)   echo "~1.9GB" ;;
+        qwen2.5-coder:7b)   echo "~4.7GB" ;;
+        qwen2.5-coder:14b)  echo "~9GB" ;;
+        qwen2.5-coder:32b)  echo "~20GB" ;;
+        qwen3-coder:30b)    echo "~19GB" ;;
+        nomic-embed-text)   echo "~274MB" ;;
+        *)                  echo "size varies" ;;
+    esac
+}
+
+set_model_sizes() {
+    COMPLETION_MODEL_SIZE=$(model_size "$COMPLETION_MODEL")
+    CHAT_MODEL_SIZE=$(model_size "$CHAT_MODEL")
+    EMBED_MODEL_SIZE=$(model_size "$EMBED_MODEL")
+
+    case "$MODEL_TIER" in
+        fast)         TOTAL_MODEL_SIZE="~2.2GB" ;;
+        standard)     TOTAL_MODEL_SIZE="~6GB" ;;
+        balanced)     TOTAL_MODEL_SIZE="~6GB" ;;
+        professional) TOTAL_MODEL_SIZE="~11.2GB" ;;
+        agentic)      TOTAL_MODEL_SIZE="~21GB" ;;
+        power)        TOTAL_MODEL_SIZE="~25GB" ;;
+        max)          TOTAL_MODEL_SIZE="~25GB" ;;
+        *)            TOTAL_MODEL_SIZE="varies" ;;
+    esac
+}
+
+apply_profile() {
+    case "$PROFILE" in
+        auto)
+            if [[ $RAM_GB -ge 48 ]]; then
+                MODEL_TIER="power"
+                COMPLETION_MODEL="qwen2.5-coder:7b"
+                CHAT_MODEL="qwen2.5-coder:32b"
+                info "Tier: POWER — 7B completion + 32B chat (near GPT-4o quality)"
+            elif [[ $RAM_GB -ge 24 ]]; then
+                MODEL_TIER="professional"
+                COMPLETION_MODEL="qwen2.5-coder:3b"
+                CHAT_MODEL="qwen2.5-coder:14b"
+                info "Tier: PROFESSIONAL — 3B completion + 14B chat"
+            else
+                MODEL_TIER="standard"
+                COMPLETION_MODEL="qwen2.5-coder:1.5b"
+                CHAT_MODEL="qwen2.5-coder:7b"
+                info "Tier: STANDARD — 1.5B completion + 7B chat"
+            fi
+            ;;
+        fast)
+            MODEL_TIER="fast"
+            COMPLETION_MODEL="qwen2.5-coder:1.5b"
+            CHAT_MODEL="qwen2.5-coder:3b"
+            info "Profile: FAST — smallest useful local coding stack"
+            ;;
+        balanced)
+            MODEL_TIER="balanced"
+            COMPLETION_MODEL="qwen2.5-coder:1.5b"
+            CHAT_MODEL="qwen2.5-coder:7b"
+            info "Profile: BALANCED — responsive default for 16GB+ machines"
+            ;;
+        professional)
+            MODEL_TIER="professional"
+            COMPLETION_MODEL="qwen2.5-coder:3b"
+            CHAT_MODEL="qwen2.5-coder:14b"
+            info "Profile: PROFESSIONAL — larger chat model for daily development"
+            ;;
+        agentic)
+            MODEL_TIER="agentic"
+            COMPLETION_MODEL="qwen2.5-coder:3b"
+            CHAT_MODEL="qwen3-coder:30b"
+            info "Profile: AGENTIC — long-context coding model for larger tasks"
+            ;;
+        max)
+            MODEL_TIER="max"
+            COMPLETION_MODEL="qwen2.5-coder:7b"
+            CHAT_MODEL="qwen2.5-coder:32b"
+            info "Profile: MAX — largest Qwen2.5-Coder tier"
+            ;;
+        *)
+            err "Unknown profile: $PROFILE"
+            exit 1
+            ;;
+    esac
+
+    EMBED_MODEL="nomic-embed-text"
+
+    [[ -n "$COMPLETION_MODEL_OVERRIDE" ]] && COMPLETION_MODEL="$COMPLETION_MODEL_OVERRIDE"
+    [[ -n "$CHAT_MODEL_OVERRIDE" ]] && CHAT_MODEL="$CHAT_MODEL_OVERRIDE"
+    [[ -n "$EMBED_MODEL_OVERRIDE" ]] && EMBED_MODEL="$EMBED_MODEL_OVERRIDE"
+    set_model_sizes
+}
 
 header() {
     echo ""
@@ -36,50 +201,40 @@ header() {
 detect_hardware() {
     info "Detecting hardware..."
 
-    if [[ "$(uname -s)" != "Darwin" ]]; then
+    local os_name
+    os_name="${LOCALAIBUNDLE_TEST_UNAME_S:-$(uname -s)}"
+    if [[ "$os_name" != "Darwin" ]]; then
         err "This tool is macOS-only (Apple Silicon required)"
         exit 1
     fi
 
-    ARCH=$(uname -m)
+    ARCH="${LOCALAIBUNDLE_TEST_UNAME_M:-$(uname -m)}"
     if [[ "$ARCH" != "arm64" ]]; then
         err "Apple Silicon (arm64) required. Detected: $ARCH"
         exit 1
     fi
 
-    RAM_BYTES=$(sysctl -n hw.memsize)
-    RAM_GB=$((RAM_BYTES / 1073741824))
-    CPU_BRAND=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
-    GPU_CORES=$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Total Number of Cores" | awk -F': ' '{print $2}' | head -1)
+    if [[ -n "${LOCALAIBUNDLE_TEST_RAM_GB:-}" ]]; then
+        RAM_GB="$LOCALAIBUNDLE_TEST_RAM_GB"
+    else
+        local ram_bytes
+        ram_bytes=$(sysctl -n hw.memsize)
+        RAM_GB=$((ram_bytes / 1073741824))
+    fi
+    CPU_BRAND="${LOCALAIBUNDLE_TEST_CPU_BRAND:-$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")}"
+    GPU_CORES="${LOCALAIBUNDLE_TEST_GPU_CORES:-$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Total Number of Cores" | awk -F': ' '{print $2}' | head -1)}"
 
     log "Hardware: ${CPU_BRAND}"
     log "RAM: ${RAM_GB}GB"
     log "GPU Cores: ${GPU_CORES:-unknown}"
     echo ""
 
-    # Select model tier based on RAM
-    if [[ $RAM_GB -ge 48 ]]; then
-        MODEL_TIER="power"
-        COMPLETION_MODEL="qwen2.5-coder:7b"
-        CHAT_MODEL="qwen2.5-coder:32b"
-        EMBED_MODEL="nomic-embed-text"
-        info "Tier: POWER — 7B completion + 32B chat (near GPT-4o quality)"
-    elif [[ $RAM_GB -ge 24 ]]; then
-        MODEL_TIER="professional"
-        COMPLETION_MODEL="qwen2.5-coder:3b"
-        CHAT_MODEL="qwen2.5-coder:14b"
-        EMBED_MODEL="nomic-embed-text"
-        info "Tier: PROFESSIONAL — 3B completion + 14B chat"
-    elif [[ $RAM_GB -ge 16 ]]; then
-        MODEL_TIER="standard"
-        COMPLETION_MODEL="qwen2.5-coder:1.5b"
-        CHAT_MODEL="qwen2.5-coder:7b"
-        EMBED_MODEL="nomic-embed-text"
-        info "Tier: STANDARD — 1.5B completion + 7B chat"
-    else
+    if [[ $RAM_GB -lt 16 ]]; then
         err "Minimum 16GB RAM required. Detected: ${RAM_GB}GB"
         exit 1
     fi
+
+    apply_profile
 }
 
 # ─── Dependency Installation ──────────────────────────────────────────────────
@@ -92,12 +247,14 @@ install_homebrew() {
     if $DRY_RUN; then dry "install Homebrew"; return; fi
     info "Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    configure_homebrew_path
     log "Homebrew installed"
 }
 
 install_ollama() {
-    if command -v ollama &>/dev/null; then
-        log "Ollama already installed ($(ollama --version 2>&1 | grep -o '[0-9].*' || echo 'unknown'))"
+    local ollama_bin
+    if ollama_bin=$(resolve_ollama_binary); then
+        log "Ollama already installed ($("$ollama_bin" --version 2>&1 | grep -o '[0-9].*' || echo 'unknown'))"
         return
     fi
     if $DRY_RUN; then dry "install Ollama app bundle (~150MB)"; return; fi
@@ -112,8 +269,12 @@ install_ollama() {
     mv "$tmp_dir/Ollama.app" "$HOME/Applications/Ollama.app"
     rm -rf "$tmp_dir"
     # Symlink the CLI binary into PATH
-    ln -sf "$HOME/Applications/Ollama.app/Contents/Resources/ollama" /opt/homebrew/bin/ollama
-    log "Ollama installed ($(ollama --version 2>&1 | grep -o '[0-9].*'))"
+    configure_homebrew_path
+    if [[ -d /opt/homebrew/bin ]]; then
+        ln -sf "$HOME/Applications/Ollama.app/Contents/Resources/ollama" /opt/homebrew/bin/ollama
+    fi
+    ollama_bin=$(resolve_ollama_binary)
+    log "Ollama installed ($("$ollama_bin" --version 2>&1 | grep -o '[0-9].*'))"
 }
 
 start_ollama() {
@@ -122,10 +283,15 @@ start_ollama() {
         return
     fi
     if $DRY_RUN; then dry "start ollama serve (background daemon)"; return; fi
+    local ollama_bin
+    if ! ollama_bin=$(resolve_ollama_binary); then
+        err "Ollama CLI not found"
+        exit 1
+    fi
     info "Starting Ollama server..."
-    ollama serve &>/dev/null &
+    "$ollama_bin" serve &>/dev/null &
     OLLAMA_PID=$!
-    for i in {1..30}; do
+    for _ in {1..30}; do
         if curl -s http://localhost:11434/api/tags &>/dev/null; then
             log "Ollama server started (PID: $OLLAMA_PID)"
             return
@@ -138,12 +304,30 @@ start_ollama() {
 
 install_launchagent() {
     local plist="$HOME/Library/LaunchAgents/com.localai.ollama.plist"
-    if [[ -f "$plist" ]]; then
+    local ollama_bin
+
+    if ! ollama_bin=$(resolve_ollama_binary); then
+        if $DRY_RUN; then
+            dry "install LaunchAgent after Ollama is installed"
+            return
+        fi
+        err "Ollama CLI not found; cannot configure LaunchAgent"
+        exit 1
+    fi
+
+    if [[ -f "$plist" ]] && grep -Fq "<string>$ollama_bin</string>" "$plist"; then
         log "Ollama LaunchAgent already configured"
         return
     fi
-    if $DRY_RUN; then dry "install LaunchAgent for Ollama auto-start on login"; return; fi
-    info "Installing Ollama LaunchAgent (auto-start on login)..."
+
+    if $DRY_RUN; then dry "install or update LaunchAgent for Ollama auto-start on login ($ollama_bin)"; return; fi
+    if [[ -f "$plist" ]]; then
+        warn "Updating existing Ollama LaunchAgent to use $ollama_bin"
+        launchctl unload "$plist" 2>/dev/null || true
+        backup_file "$plist"
+    else
+        info "Installing Ollama LaunchAgent (auto-start on login)..."
+    fi
     mkdir -p "$HOME/Library/LaunchAgents"
     cat > "$plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -154,7 +338,7 @@ install_launchagent() {
     <string>com.localai.ollama</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$HOME/Applications/Ollama.app/Contents/Resources/ollama</string>
+        <string>$ollama_bin</string>
         <string>serve</string>
     </array>
     <key>RunAtLoad</key>
@@ -182,12 +366,355 @@ EOF
 
 # ─── Test Command ─────────────────────────────────────────────────────────────
 
+configured_model_for_role() {
+    local role="$1"
+    local fallback="$2"
+    local config="$HOME/.continue/config.yaml"
+
+    if [[ ! -f "$config" ]]; then
+        echo "$fallback"
+        return
+    fi
+
+    python3 "$(helper_script config-model-for-role.py)" "$config" "$role" "$fallback" 2>/dev/null || echo "$fallback"
+}
+
+installed_models() {
+    local ollama_bin
+    if ollama_bin=$(resolve_ollama_binary); then
+        "$ollama_bin" list 2>/dev/null || true
+    fi
+}
+
+model_installed() {
+    local model="$1"
+    installed_models | grep -Fq "$model"
+}
+
+launchagent_plist() {
+    echo "$HOME/Library/LaunchAgents/com.localai.ollama.plist"
+}
+
+launchagent_ok() {
+    local plist ollama_bin
+    plist=$(launchagent_plist)
+    ollama_bin=$(resolve_ollama_binary 2>/dev/null || true)
+    [[ -n "$ollama_bin" && -f "$plist" ]] && grep -Fq "<string>$ollama_bin</string>" "$plist"
+}
+
+continue_config_ok() {
+    local config="$HOME/.continue/config.yaml"
+    [[ -f "$config" ]] \
+        && grep -q '^schema: v1$' "$config" \
+        && grep -Fq "model: ${CHAT_MODEL}" "$config" \
+        && grep -Fq "model: ${COMPLETION_MODEL}" "$config" \
+        && grep -Fq "model: ${EMBED_MODEL}" "$config"
+}
+
+continue_telemetry_disabled() {
+    local vscode_settings="$HOME/Library/Application Support/Code/User/settings.json"
+    [[ -f "$vscode_settings" ]] && grep -q '"continue.telemetryEnabled"[[:space:]]*:[[:space:]]*false' "$vscode_settings"
+}
+
+validate_continue_config() {
+    local config="${1:-$HOME/.continue/config.yaml}"
+
+    if [[ ! -f "$config" ]]; then
+        err "Continue config not found: $config"
+        return 1
+    fi
+
+    python3 "$(helper_script validate-config.py)" "$config" "$CHAT_MODEL" "$COMPLETION_MODEL" "$EMBED_MODEL"
+}
+
+write_install_report() {
+    mkdir -p "$REPORT_DIR"
+    REPORT_FILE="$REPORT_DIR/install-report-$(timestamp).json"
+
+    local ollama_bin ollama_version report_args
+    ollama_bin=$(resolve_ollama_binary 2>/dev/null || true)
+    if [[ -n "$ollama_bin" ]]; then
+        ollama_version=$("$ollama_bin" --version 2>&1 | head -1)
+    else
+        ollama_version=""
+    fi
+
+    report_args=(
+        --output "$REPORT_FILE"
+        --version "$VERSION"
+        --timestamp "$(timestamp)"
+        --profile "$PROFILE"
+        --model-tier "$MODEL_TIER"
+        --arch "$ARCH"
+        --cpu "$CPU_BRAND"
+        --gpu-cores "${GPU_CORES:-unknown}"
+        --ram-gb "$RAM_GB"
+        --completion-model "$COMPLETION_MODEL"
+        --chat-model "$CHAT_MODEL"
+        --embed-model "$EMBED_MODEL"
+        --total-model-size "$TOTAL_MODEL_SIZE"
+        --ollama-binary "$ollama_bin"
+        --ollama-version "$ollama_version"
+    )
+    curl -s http://localhost:11434/api/tags &>/dev/null && report_args+=(--ollama-server-running)
+    launchagent_ok && report_args+=(--launchagent-ok)
+    command -v code &>/dev/null && report_args+=(--vscode-installed)
+    code --list-extensions 2>/dev/null | grep -qi "continue" && report_args+=(--continue-installed)
+    continue_config_ok && report_args+=(--continue-config-ok)
+
+    python3 "$(helper_script write-install-report.py)" "${report_args[@]}"
+    log "Install report: $REPORT_FILE"
+}
+
+print_check() {
+    local status="$1"
+    local label="$2"
+    local detail="${3:-}"
+
+    case "$status" in
+        ok)   log "$label${detail:+: $detail}" ;;
+        warn) warn "$label${detail:+: $detail}" ;;
+        fail) err "$label${detail:+: $detail}" ;;
+    esac
+}
+
+run_doctor_checks() {
+    local failures=0 warnings=0
+    local ollama_bin
+
+    if ollama_bin=$(resolve_ollama_binary); then
+        print_check ok "Ollama CLI" "$ollama_bin"
+    else
+        print_check fail "Ollama CLI not found"
+        failures=$((failures + 1))
+    fi
+
+    if curl -s http://localhost:11434/api/tags &>/dev/null; then
+        print_check ok "Ollama server" "running on localhost:11434"
+    else
+        print_check warn "Ollama server not running" "repair can start it"
+        warnings=$((warnings + 1))
+    fi
+
+    if launchagent_ok; then
+        print_check ok "Ollama LaunchAgent" "$(launchagent_plist)"
+    else
+        print_check warn "Ollama LaunchAgent missing or stale" "repair can rewrite it"
+        warnings=$((warnings + 1))
+    fi
+
+    local model
+    for model in "$COMPLETION_MODEL" "$CHAT_MODEL" "$EMBED_MODEL"; do
+        if model_installed "$model"; then
+            print_check ok "Model installed" "$model"
+        else
+            print_check warn "Model missing" "$model"
+            warnings=$((warnings + 1))
+        fi
+    done
+
+    if command -v code &>/dev/null; then
+        print_check ok "VS Code CLI" "$(command -v code)"
+    else
+        print_check warn "VS Code CLI not found"
+        warnings=$((warnings + 1))
+    fi
+
+    if code --list-extensions 2>/dev/null | grep -qi "continue"; then
+        print_check ok "Continue.dev extension" "installed"
+    else
+        print_check warn "Continue.dev extension missing"
+        warnings=$((warnings + 1))
+    fi
+
+    if continue_config_ok; then
+        print_check ok "Continue config" "$HOME/.continue/config.yaml"
+        if validate_continue_config "$HOME/.continue/config.yaml" 2>/dev/null; then
+            print_check ok "Continue config validation" "passed"
+        else
+            print_check warn "Continue config validation failed"
+            warnings=$((warnings + 1))
+        fi
+    else
+        print_check warn "Continue config missing or not matching selected profile"
+        warnings=$((warnings + 1))
+    fi
+
+    if continue_telemetry_disabled; then
+        print_check ok "Continue telemetry setting" "disabled"
+    else
+        print_check warn "Continue telemetry setting not confirmed disabled"
+        warnings=$((warnings + 1))
+    fi
+
+    echo ""
+    if [[ $failures -eq 0 && $warnings -eq 0 ]]; then
+        echo -e "${GREEN}${BOLD}  ✓ Doctor found no issues.${NC}"
+    elif [[ $failures -eq 0 ]]; then
+        echo -e "${YELLOW}${BOLD}  ! Doctor found ${warnings} warning(s). Run '$0 repair' to fix common issues.${NC}"
+    else
+        echo -e "${RED}${BOLD}  ✗ Doctor found ${failures} failure(s) and ${warnings} warning(s).${NC}"
+    fi
+
+    return "$failures"
+}
+
+cmd_doctor() {
+    header
+    detect_hardware
+    info "Running diagnostics..."
+    echo ""
+    run_doctor_checks
+}
+
+cmd_repair() {
+    header
+    detect_hardware
+    info "Repairing LocalAIbundle installation..."
+    echo ""
+
+    if $INSTALL_OLLAMA; then
+        install_ollama
+    fi
+    if $INSTALL_LAUNCHAGENT; then
+        install_launchagent
+    fi
+    if $START_OLLAMA; then
+        start_ollama
+    fi
+    if $PULL_MODEL_FILES; then
+        pull_models
+    fi
+    if $INSTALL_VSCODE; then
+        install_homebrew
+    fi
+    if $INSTALL_VSCODE; then
+        install_vscode
+    fi
+    if $INSTALL_CONTINUE; then
+        install_continue_extension
+    fi
+    if $WRITE_CONFIG; then
+        configure_continue
+    fi
+
+    verify_installation
+    write_install_report
+}
+
+script_dir() {
+    cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+}
+
+helper_script() {
+    echo "$(script_dir)/scripts/$1"
+}
+
+import_offline_bundle() {
+    local bundle="$1"
+
+    if [[ ! -f "$bundle" ]]; then
+        err "Offline bundle not found: $bundle"
+        exit 1
+    fi
+
+    if $DRY_RUN; then
+        dry "import offline bundle $bundle"
+        return
+    fi
+
+    info "Importing offline bundle: $bundle"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    tar -xzf "$bundle" -C "$tmp_dir"
+
+    if [[ -f "$tmp_dir/payload/ollama-models.tar.gz" ]]; then
+        mkdir -p "$HOME/.ollama"
+        tar -xzf "$tmp_dir/payload/ollama-models.tar.gz" -C "$HOME/.ollama"
+        log "Imported Ollama model cache"
+    else
+        warn "Offline bundle does not include an Ollama model cache"
+    fi
+
+    rm -rf "$tmp_dir"
+}
+
+cmd_bundle() {
+    header
+    detect_hardware
+
+    local output="${BUNDLE_OUTPUT:-LocalAIbundle-offline-${MODEL_TIER}.tar.gz}"
+    local tmp_dir payload_dir source_dir
+    tmp_dir=$(mktemp -d)
+    payload_dir="$tmp_dir/payload"
+    source_dir=$(script_dir)
+    mkdir -p "$payload_dir"
+
+    if $DRY_RUN; then
+        dry "create offline bundle at $output"
+        if [[ -d "$HOME/.ollama/models" ]]; then
+            dry "include Ollama model cache from $HOME/.ollama/models"
+        else
+            dry "create scripts/config bundle without Ollama model cache"
+        fi
+        rm -rf "$tmp_dir"
+        return
+    fi
+
+    info "Building offline bundle..."
+    cp "$source_dir/install.sh" "$payload_dir/install.sh"
+    [[ -d "$source_dir/scripts" ]] && cp -R "$source_dir/scripts" "$payload_dir/scripts"
+    [[ -f "$source_dir/README.md" ]] && cp "$source_dir/README.md" "$payload_dir/README.md"
+    [[ -f "$source_dir/LICENSE" ]] && cp "$source_dir/LICENSE" "$payload_dir/LICENSE"
+    [[ -f "$source_dir/.gitignore" ]] && cp "$source_dir/.gitignore" "$payload_dir/.gitignore"
+
+    cat > "$payload_dir/manifest.json" << JSON
+{
+  "name": "LocalAIbundle offline bundle",
+  "version": "$VERSION",
+  "created": "$(timestamp)",
+  "profile": "$PROFILE",
+  "model_tier": "$MODEL_TIER",
+  "models": {
+    "completion": "$COMPLETION_MODEL",
+    "chat": "$CHAT_MODEL",
+    "embedding": "$EMBED_MODEL"
+  }
+}
+JSON
+
+    if [[ -d "$HOME/.ollama/models" ]]; then
+        info "Adding local Ollama model cache from $HOME/.ollama/models"
+        tar -C "$HOME/.ollama" -czf "$payload_dir/ollama-models.tar.gz" models
+    else
+        warn "No local Ollama model cache found; bundle will include scripts/config only"
+    fi
+
+    tar -C "$tmp_dir" -czf "$output" payload
+    rm -rf "$tmp_dir"
+    log "Offline bundle created: $output"
+}
+
+cmd_validate_config() {
+    header
+    detect_hardware
+    local config="$HOME/.continue/config.yaml"
+    info "Validating Continue config: $config"
+    validate_continue_config "$config"
+    log "Continue config validation passed"
+}
+
 cmd_test() {
     header
+    detect_hardware
     info "Running inference smoke tests..."
     echo ""
 
     local failures=0
+    local completion_model chat_model embed_model
+    completion_model=$(configured_model_for_role "autocomplete" "$COMPLETION_MODEL")
+    chat_model=$(configured_model_for_role "chat" "$CHAT_MODEL")
+    embed_model=$(configured_model_for_role "embed" "$EMBED_MODEL")
 
     # Check Ollama is running
     if ! curl -s http://localhost:11434/api/tags &>/dev/null; then
@@ -197,25 +724,18 @@ cmd_test() {
 
     # Get installed models
     local models
-    models=$(curl -s http://localhost:11434/api/tags | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for m in data.get('models', []):
-    print(m['name'])
-" 2>/dev/null)
+    models=$(curl -s http://localhost:11434/api/tags | python3 "$(helper_script ollama-json.py)" models 2>/dev/null)
 
     # Test completion model
-    local completion_model
-    completion_model=$(echo "$models" | grep "qwen2.5-coder" | grep -E "1\.5b|3b" | head -1)
-    if [[ -n "$completion_model" ]]; then
+    if echo "$models" | grep -Fxq "$completion_model"; then
         info "Testing completion model: $completion_model"
         local result
         result=$(curl -s http://localhost:11434/api/generate \
             -d "{\"model\":\"$completion_model\",\"prompt\":\"def quicksort(arr):\\n    \",\"stream\":false}" 2>/dev/null)
         local tokens duration speed
-        tokens=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('eval_count',0))" 2>/dev/null)
-        duration=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(f\"{r.get('eval_duration',0)/1e9:.2f}\")" 2>/dev/null)
-        speed=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); c=r.get('eval_count',0); d=r.get('eval_duration',1)/1e9; print(f\"{c/d:.1f}\")" 2>/dev/null)
+        tokens=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat tokens 2>/dev/null)
+        duration=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat duration 2>/dev/null)
+        speed=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat speed 2>/dev/null)
         if [[ "$tokens" -gt 0 ]] 2>/dev/null; then
             log "Completion: ${tokens} tokens in ${duration}s (${speed} tok/s)"
             if (( $(echo "$speed < 20" | bc -l) )); then
@@ -226,25 +746,23 @@ for m in data.get('models', []):
             failures=$((failures + 1))
         fi
     else
-        warn "No completion model found"
+        warn "Completion model not found: $completion_model"
         failures=$((failures + 1))
     fi
 
     echo ""
 
     # Test chat model
-    local chat_model
-    chat_model=$(echo "$models" | grep "qwen2.5-coder" | grep -E "7b|14b|32b" | head -1)
-    if [[ -n "$chat_model" ]]; then
+    if echo "$models" | grep -Fxq "$chat_model"; then
         info "Testing chat model: $chat_model"
         local result
         result=$(curl -s http://localhost:11434/api/generate \
             -d "{\"model\":\"$chat_model\",\"prompt\":\"In one sentence, what does malloc() do in C?\",\"stream\":false}" 2>/dev/null)
         local tokens duration speed response
-        tokens=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('eval_count',0))" 2>/dev/null)
-        duration=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(f\"{r.get('eval_duration',0)/1e9:.2f}\")" 2>/dev/null)
-        speed=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); c=r.get('eval_count',0); d=r.get('eval_duration',1)/1e9; print(f\"{c/d:.1f}\")" 2>/dev/null)
-        response=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('response','')[:100])" 2>/dev/null)
+        tokens=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat tokens 2>/dev/null)
+        duration=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat duration 2>/dev/null)
+        speed=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat speed 2>/dev/null)
+        response=$(echo "$result" | python3 "$(helper_script ollama-json.py)" response 100 2>/dev/null)
         if [[ "$tokens" -gt 0 ]] 2>/dev/null; then
             log "Chat: ${tokens} tokens in ${duration}s (${speed} tok/s)"
             echo -e "    ${DIM}\"${response}...\"${NC}"
@@ -253,22 +771,20 @@ for m in data.get('models', []):
             failures=$((failures + 1))
         fi
     else
-        warn "No chat model found"
+        warn "Chat model not found: $chat_model"
         failures=$((failures + 1))
     fi
 
     echo ""
 
     # Test embedding model
-    local embed_model
-    embed_model=$(echo "$models" | grep "nomic-embed\|mxbai-embed\|all-minilm" | head -1)
-    if [[ -n "$embed_model" ]]; then
+    if echo "$models" | grep -Fxq "$embed_model"; then
         info "Testing embedding model: $embed_model"
         local result
         result=$(curl -s http://localhost:11434/api/embed \
             -d "{\"model\":\"$embed_model\",\"input\":\"test embedding generation\"}" 2>/dev/null)
         local dims
-        dims=$(echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print(len(r.get('embeddings',[[]])[0]))" 2>/dev/null)
+        dims=$(echo "$result" | python3 "$(helper_script ollama-json.py)" embedding-dims 2>/dev/null)
         if [[ "$dims" -gt 0 ]] 2>/dev/null; then
             log "Embeddings: ${dims} dimensions — codebase indexing will work"
         else
@@ -276,7 +792,7 @@ for m in data.get('models', []):
             failures=$((failures + 1))
         fi
     else
-        warn "No embedding model found"
+        warn "Embedding model not found: $embed_model"
         failures=$((failures + 1))
     fi
 
@@ -294,34 +810,41 @@ for m in data.get('models', []):
 pull_models() {
     echo ""
     if $DRY_RUN; then
-        dry "ollama pull ${COMPLETION_MODEL} (~1.9GB download)"
-        dry "ollama pull ${CHAT_MODEL} (~9GB download)"
-        dry "ollama pull ${EMBED_MODEL} (~274MB download)"
+        dry "ollama pull ${COMPLETION_MODEL} (${COMPLETION_MODEL_SIZE} download)"
+        dry "ollama pull ${CHAT_MODEL} (${CHAT_MODEL_SIZE} download)"
+        dry "ollama pull ${EMBED_MODEL} (${EMBED_MODEL_SIZE} download)"
         echo ""
-        info "Total model downloads: ~11.2GB"
+        info "Total model downloads: ${TOTAL_MODEL_SIZE}"
         return
     fi
     info "Pulling models (this may take a while on first run)..."
     echo ""
 
+    local ollama_bin
+    if ! ollama_bin=$(resolve_ollama_binary); then
+        err "Ollama CLI not found"
+        exit 1
+    fi
+
     info "Pulling completion model: ${COMPLETION_MODEL}"
-    ollama pull "$COMPLETION_MODEL"
+    "$ollama_bin" pull "$COMPLETION_MODEL"
     log "Completion model ready: ${COMPLETION_MODEL}"
     echo ""
 
     info "Pulling chat model: ${CHAT_MODEL}"
-    ollama pull "$CHAT_MODEL"
+    "$ollama_bin" pull "$CHAT_MODEL"
     log "Chat model ready: ${CHAT_MODEL}"
     echo ""
 
     info "Pulling embedding model: ${EMBED_MODEL}"
-    ollama pull "$EMBED_MODEL"
+    "$ollama_bin" pull "$EMBED_MODEL"
     log "Embedding model ready: ${EMBED_MODEL}"
 }
 
 # ─── VS Code + Continue.dev ───────────────────────────────────────────────────
 
 install_vscode() {
+    configure_homebrew_path
     if command -v code &>/dev/null; then
         log "VS Code already installed"
         return
@@ -369,6 +892,23 @@ install_continue_extension() {
     log "Continue.dev extension installed"
 }
 
+disable_continue_telemetry() {
+    local vscode_settings="$HOME/Library/Application Support/Code/User/settings.json"
+
+    mkdir -p "$(dirname "$vscode_settings")"
+    if [[ -f "$vscode_settings" ]]; then
+        backup_file "$vscode_settings"
+    else
+        echo '{}' > "$vscode_settings"
+    fi
+
+    if python3 "$(helper_script update-vscode-settings.py)" "$vscode_settings"; then
+        log "Continue.dev telemetry disabled in VS Code settings"
+    else
+        warn "Could not update VS Code settings automatically; disable 'Allow Anonymous Telemetry' in Continue settings"
+    fi
+}
+
 configure_continue() {
     CONTINUE_DIR="$HOME/.continue"
 
@@ -384,13 +924,15 @@ configure_continue() {
 
     mkdir -p "$CONTINUE_DIR"
     info "Configuring Continue.dev for local-only operation..."
+    backup_file "$CONTINUE_DIR/config.yaml"
 
     cat > "$CONTINUE_DIR/config.yaml" << YAML
-# LocalAIbundle — Continue.dev Configuration (v1.2.x YAML format)
+# LocalAIbundle — Continue.dev Configuration (v1 YAML format)
 # All models run locally via Ollama. No cloud connections.
 
 name: LocalAIbundle
-version: "1.0"
+version: 1.0.0
+schema: v1
 
 models:
   - name: Chat (${CHAT_MODEL})
@@ -400,6 +942,7 @@ models:
     roles:
       - chat
       - edit
+      - apply
     defaultCompletionOptions:
       contextLength: 32768
       maxTokens: 4096
@@ -441,18 +984,9 @@ context:
 docs: []
 YAML
 
-    # Disable telemetry via VS Code settings
-    local vscode_settings="$HOME/Library/Application Support/Code/User/settings.json"
-    if [[ -f "$vscode_settings" ]]; then
-        # Add continue telemetry setting if not present
-        if ! grep -q "continue.telemetryEnabled" "$vscode_settings"; then
-            # Insert before the last closing brace
-            sed -i '' '$ s/}$/,\n  "continue.telemetryEnabled": false\n}/' "$vscode_settings"
-        fi
-    else
-        mkdir -p "$(dirname "$vscode_settings")"
-        echo '{ "continue.telemetryEnabled": false }' > "$vscode_settings"
-    fi
+    validate_continue_config "$CONTINUE_DIR/config.yaml"
+    log "Continue.dev config validated"
+    disable_continue_telemetry
 
     log "Continue.dev configured at $CONTINUE_DIR/config.yaml"
 }
@@ -475,24 +1009,28 @@ verify_installation() {
     fi
 
     # Check models
-    local models
-    models=$(ollama list 2>/dev/null || echo "")
+    local models ollama_bin
+    if ollama_bin=$(resolve_ollama_binary); then
+        models=$("$ollama_bin" list 2>/dev/null || echo "")
+    else
+        models=""
+    fi
 
-    if echo "$models" | grep -q "$COMPLETION_MODEL"; then
+    if echo "$models" | grep -Fq "$COMPLETION_MODEL"; then
         log "Completion model: ${COMPLETION_MODEL} ✓"
     else
         warn "Completion model not found: ${COMPLETION_MODEL}"
         all_good=false
     fi
 
-    if echo "$models" | grep -q "$CHAT_MODEL"; then
+    if echo "$models" | grep -Fq "$CHAT_MODEL"; then
         log "Chat model: ${CHAT_MODEL} ✓"
     else
         warn "Chat model not found: ${CHAT_MODEL}"
         all_good=false
     fi
 
-    if echo "$models" | grep -q "$EMBED_MODEL"; then
+    if echo "$models" | grep -Fq "$EMBED_MODEL"; then
         log "Embedding model: ${EMBED_MODEL} ✓"
     else
         warn "Embedding model not found: ${EMBED_MODEL}"
@@ -578,9 +1116,14 @@ cmd_status() {
         log "Ollama: running"
         echo ""
         info "Installed models:"
-        ollama list 2>/dev/null | while IFS= read -r line; do
-            echo "    $line"
-        done
+        local ollama_bin
+        if ollama_bin=$(resolve_ollama_binary); then
+            "$ollama_bin" list 2>/dev/null | while IFS= read -r line; do
+                echo "    $line"
+            done
+        else
+            warn "Ollama CLI not found"
+        fi
     else
         warn "Ollama: not running"
         echo "    Start with: ollama serve"
@@ -614,7 +1157,12 @@ cmd_status() {
 cmd_uninstall() {
     header
     warn "This will remove:"
-    echo "    - Ollama app and all downloaded models (~11GB)"
+    echo "    - Ollama app"
+    if $PRESERVE_MODELS; then
+        echo "    - Ollama models: preserved because --preserve-models was set"
+    else
+        echo "    - Ollama models and data"
+    fi
     echo "    - Ollama LaunchAgent (auto-start)"
     echo "    - Continue.dev VS Code extension"
     echo "    - Continue.dev configuration"
@@ -645,10 +1193,20 @@ cmd_uninstall() {
 
     info "Removing Ollama app..."
     rm -rf "$HOME/Applications/Ollama.app"
-    rm -f /opt/homebrew/bin/ollama
+    if [[ -L /opt/homebrew/bin/ollama ]]; then
+        local ollama_link_target
+        ollama_link_target=$(readlink /opt/homebrew/bin/ollama)
+        if [[ "$ollama_link_target" == "$HOME/Applications/Ollama.app/Contents/Resources/ollama" ]]; then
+            rm -f /opt/homebrew/bin/ollama
+        fi
+    fi
 
-    info "Removing Ollama models and data..."
-    rm -rf "$HOME/.ollama"
+    if $PRESERVE_MODELS; then
+        info "Preserving Ollama models and data at $HOME/.ollama"
+    else
+        info "Removing Ollama models and data..."
+        rm -rf "$HOME/.ollama"
+    fi
 
     log "Uninstall complete. All LocalAIbundle components removed."
 }
@@ -663,35 +1221,72 @@ main() {
     echo -e "${BOLD}━━━ Installing Components ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
-    install_homebrew
-    install_ollama
-    install_launchagent
-    start_ollama
-    pull_models
+    if $INSTALL_VSCODE; then
+        install_homebrew
+    fi
+    if $INSTALL_OLLAMA; then
+        install_ollama
+    fi
+    if [[ -n "$OFFLINE_BUNDLE" ]]; then
+        import_offline_bundle "$OFFLINE_BUNDLE"
+    fi
+    if $INSTALL_LAUNCHAGENT; then
+        install_launchagent
+    fi
+    if $START_OLLAMA; then
+        start_ollama
+    fi
+    if $PULL_MODEL_FILES; then
+        pull_models
+    else
+        info "Skipping model downloads"
+    fi
 
     echo ""
-    install_vscode
-    install_continue_extension
-    configure_continue
+    if $INSTALL_VSCODE; then
+        install_vscode
+    else
+        info "Skipping VS Code install"
+    fi
+    if $INSTALL_CONTINUE; then
+        install_continue_extension
+    else
+        info "Skipping Continue.dev extension install"
+    fi
+    if $WRITE_CONFIG; then
+        configure_continue
+    else
+        info "Skipping Continue.dev config write"
+    fi
 
     if $DRY_RUN; then
         echo ""
         echo -e "${BOLD}━━━ Dry Run Summary ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
-        echo -e "  ${BOLD}Disk space required:${NC} ~12GB (models) + ~550MB (tools)"
+        echo -e "  ${BOLD}Model tier:${NC} ${MODEL_TIER}"
+        echo -e "  ${BOLD}Disk space required:${NC} ${TOTAL_MODEL_SIZE} (models) + ~550MB (tools)"
         echo -e "  ${BOLD}Disk space available:${NC} $(df -h / | tail -1 | awk '{print $4}')"
         echo -e "  ${BOLD}Estimated time:${NC} 10-15 min (mostly model downloads)"
         echo ""
         echo -e "  ${BOLD}Will install:${NC}"
-        echo -e "  ├─ Ollama app bundle (inference engine)"
-        echo -e "  ├─ VS Code (editor)"
-        echo -e "  ├─ Continue.dev (VS Code extension)"
-        echo -e "  ├─ qwen2.5-coder:3b (~1.9GB)"
-        echo -e "  ├─ qwen2.5-coder:14b (~9GB)"
-        echo -e "  └─ nomic-embed-text (~274MB)"
+        $INSTALL_OLLAMA && echo -e "  ├─ Ollama app bundle (inference engine)"
+        $INSTALL_LAUNCHAGENT && echo -e "  ├─ Ollama LaunchAgent"
+        if $PULL_MODEL_FILES; then
+            echo -e "  ├─ ${COMPLETION_MODEL} (${COMPLETION_MODEL_SIZE})"
+            echo -e "  ├─ ${CHAT_MODEL} (${CHAT_MODEL_SIZE})"
+            echo -e "  ├─ ${EMBED_MODEL} (${EMBED_MODEL_SIZE})"
+        fi
+        $INSTALL_VSCODE && echo -e "  ├─ VS Code (editor)"
+        $INSTALL_CONTINUE && echo -e "  ├─ Continue.dev (VS Code extension)"
+        [[ -n "$OFFLINE_BUNDLE" ]] && echo -e "  ├─ offline model cache from ${OFFLINE_BUNDLE}"
+        echo -e "  └─ install report in ${REPORT_DIR}"
         echo ""
         echo -e "  ${BOLD}Will configure:${NC}"
-        echo -e "  └─ ~/.continue/config.yaml (local-only, no telemetry)"
+        if $WRITE_CONFIG; then
+            echo -e "  └─ ~/.continue/config.yaml (local-only, no telemetry)"
+        else
+            echo -e "  └─ no Continue config changes"
+        fi
         echo ""
         echo -e "  ${DIM}Run without --dry-run to execute.${NC}"
         echo ""
@@ -699,47 +1294,218 @@ main() {
     fi
 
     verify_installation
+    write_install_report
     print_summary
 }
 
 # ─── CLI Entry Point ──────────────────────────────────────────────────────────
 
-# Parse flags
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=true ;;
-    esac
-done
+usage() {
+    echo "LocalAIbundle v${VERSION} — Private AI Coding Assistant"
+    echo ""
+    echo "Usage: $0 [command] [flags]"
+    echo ""
+    echo "Commands:"
+    echo "  install       Install and configure everything (default)"
+    echo "  doctor        Run diagnostics without changing the system"
+    echo "  repair        Repair common installation/configuration issues"
+    echo "  status        Check current installation status"
+    echo "  test          Run inference smoke tests (speed + correctness)"
+    echo "  validate-config Validate the generated Continue config"
+    echo "  bundle        Create an offline bundle from this repo and local model cache"
+    echo "  uninstall     Remove all components"
+    echo "  --version     Show version"
+    echo "  --help        Show this help"
+    echo ""
+    echo "Profiles:"
+    echo "  auto          Select by RAM (default)"
+    echo "  fast          Smallest useful stack"
+    echo "  balanced      Responsive 16GB+ stack"
+    echo "  professional  Larger daily-development stack"
+    echo "  agentic       Long-context coding model for larger tasks"
+    echo "  max           Largest Qwen2.5-Coder tier"
+    echo ""
+    echo "Flags:"
+    echo "  --dry-run                    Show planned actions without making changes"
+    echo "  --profile <name>             Choose a model profile"
+    echo "  --completion-model <model>   Override autocomplete model"
+    echo "  --chat-model <model>         Override chat/edit model"
+    echo "  --embed-model <model>        Override embedding model"
+    echo "  --models-only                Install/start Ollama and pull models only"
+    echo "  --config-only                Write Continue config/settings only"
+    echo "  --no-vscode                  Skip VS Code and Continue extension installs"
+    echo "  --no-continue                Skip Continue extension and config"
+    echo "  --no-launchagent             Skip Ollama auto-start LaunchAgent"
+    echo "  --no-model-pull              Skip model downloads"
+    echo "  --offline <bundle.tgz>       Import model cache from an offline bundle"
+    echo "  --output <bundle.tgz>        Output path for the bundle command"
+    echo "  --report-dir <dir>           Directory for install reports"
+    echo "  --preserve-models            Keep ~/.ollama during uninstall"
+}
 
-# Strip flags to get command
-CMD="${1:-install}"
-[[ "$CMD" == "--dry-run" ]] && CMD="install"
-
-case "$CMD" in
-    install)  main ;;
-    status)   cmd_status ;;
-    test)     cmd_test ;;
-    uninstall) cmd_uninstall ;;
-    --version|-v) echo "LocalAIbundle v${VERSION}" ;;
-    --help|-h)
-        echo "LocalAIbundle v${VERSION} — Private AI Coding Assistant"
-        echo ""
-        echo "Usage: $0 [command] [flags]"
-        echo ""
-        echo "Commands:"
-        echo "  install     Install and configure everything (default)"
-        echo "  status      Check current installation status"
-        echo "  test        Run inference smoke tests (speed + correctness)"
-        echo "  uninstall   Remove all components"
-        echo "  --version   Show version"
-        echo "  --help      Show this help"
-        echo ""
-        echo "Flags:"
-        echo "  --dry-run   Show what would be installed without doing it"
-        ;;
-    *)
-        err "Unknown command: $CMD"
-        echo "Run '$0 --help' for usage."
+require_arg() {
+    local flag="$1"
+    local value="${2:-}"
+    if [[ -z "$value" || "$value" == --* ]]; then
+        err "$flag requires a value"
         exit 1
-        ;;
-esac
+    fi
+}
+
+parse_args() {
+    CMD="install"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            install|doctor|repair|status|test|validate-config|bundle|uninstall)
+                CMD="$1"
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            --profile)
+                require_arg "$1" "${2:-}"
+                PROFILE="$2"
+                shift 2
+                ;;
+            --profile=*)
+                PROFILE="${1#*=}"
+                shift
+                ;;
+            --completion-model)
+                require_arg "$1" "${2:-}"
+                COMPLETION_MODEL_OVERRIDE="$2"
+                shift 2
+                ;;
+            --completion-model=*)
+                COMPLETION_MODEL_OVERRIDE="${1#*=}"
+                shift
+                ;;
+            --chat-model)
+                require_arg "$1" "${2:-}"
+                CHAT_MODEL_OVERRIDE="$2"
+                shift 2
+                ;;
+            --chat-model=*)
+                CHAT_MODEL_OVERRIDE="${1#*=}"
+                shift
+                ;;
+            --embed-model)
+                require_arg "$1" "${2:-}"
+                EMBED_MODEL_OVERRIDE="$2"
+                shift 2
+                ;;
+            --embed-model=*)
+                EMBED_MODEL_OVERRIDE="${1#*=}"
+                shift
+                ;;
+            --models-only)
+                INSTALL_VSCODE=false
+                INSTALL_CONTINUE=false
+                WRITE_CONFIG=false
+                shift
+                ;;
+            --config-only)
+                INSTALL_OLLAMA=false
+                INSTALL_LAUNCHAGENT=false
+                START_OLLAMA=false
+                PULL_MODEL_FILES=false
+                INSTALL_VSCODE=false
+                INSTALL_CONTINUE=false
+                WRITE_CONFIG=true
+                shift
+                ;;
+            --no-vscode)
+                INSTALL_VSCODE=false
+                INSTALL_CONTINUE=false
+                shift
+                ;;
+            --no-continue)
+                INSTALL_CONTINUE=false
+                WRITE_CONFIG=false
+                shift
+                ;;
+            --no-launchagent)
+                INSTALL_LAUNCHAGENT=false
+                shift
+                ;;
+            --no-model-pull)
+                PULL_MODEL_FILES=false
+                shift
+                ;;
+            --offline)
+                require_arg "$1" "${2:-}"
+                OFFLINE_BUNDLE="$2"
+                PULL_MODEL_FILES=false
+                shift 2
+                ;;
+            --offline=*)
+                OFFLINE_BUNDLE="${1#*=}"
+                PULL_MODEL_FILES=false
+                shift
+                ;;
+            --output)
+                require_arg "$1" "${2:-}"
+                BUNDLE_OUTPUT="$2"
+                shift 2
+                ;;
+            --output=*)
+                BUNDLE_OUTPUT="${1#*=}"
+                shift
+                ;;
+            --report-dir)
+                require_arg "$1" "${2:-}"
+                REPORT_DIR="$2"
+                shift 2
+                ;;
+            --report-dir=*)
+                REPORT_DIR="${1#*=}"
+                shift
+                ;;
+            --preserve-models)
+                PRESERVE_MODELS=true
+                shift
+                ;;
+            --help|-h)
+                CMD="help"
+                shift
+                ;;
+            --version|-v)
+                CMD="version"
+                shift
+                ;;
+            *)
+                err "Unknown argument: $1"
+                echo "Run '$0 --help' for usage."
+                exit 1
+                ;;
+        esac
+    done
+}
+
+dispatch() {
+    case "$CMD" in
+        install)   main ;;
+        doctor)    cmd_doctor ;;
+        repair)    cmd_repair ;;
+        status)    cmd_status ;;
+        test)      cmd_test ;;
+        validate-config) cmd_validate_config ;;
+        bundle)    cmd_bundle ;;
+        uninstall) cmd_uninstall ;;
+        version)   echo "LocalAIbundle v${VERSION}" ;;
+        help)      usage ;;
+        *)
+            err "Unknown command: $CMD"
+            echo "Run '$0 --help' for usage."
+            exit 1
+            ;;
+    esac
+}
+
+if [[ "${LOCALAIBUNDLE_SOURCE_ONLY:-false}" != "true" ]]; then
+    parse_args "$@"
+    dispatch
+fi

@@ -1,28 +1,34 @@
 # LocalAIbundle
 
-Fully local AI coding assistant for macOS (Apple Silicon). Installs and configures a complete private AI stack for code completion, chat, and codebase-aware answers — with zero cloud dependencies.
+[![CI](https://github.com/DevenDucommun/LocalAIbundle/actions/workflows/ci.yml/badge.svg)](https://github.com/DevenDucommun/LocalAIbundle/actions/workflows/ci.yml)
 
-**Your code never leaves your machine.**
+LocalAIbundle installs and maintains a fully local AI coding stack for macOS Apple Silicon. It sets up Ollama, coding models, VS Code, Continue.dev, diagnostics, repair tooling, and offline bundle support with no cloud accounts or API keys.
 
-## What it installs
+**Your code stays on your machine.**
 
-| Component | Purpose |
+## What It Provides
+
+| Capability | Details |
 |-----------|---------|
-| [Ollama](https://ollama.com) | Local inference engine (Metal-accelerated) |
-| Qwen2.5-Coder (small) | Fast tab completion (<200ms) |
-| Qwen2.5-Coder (large) | Chat, explanations, refactoring |
-| nomic-embed-text | Codebase indexing for context-aware answers |
-| [VS Code](https://code.visualstudio.com) | Editor |
-| [Continue.dev](https://continue.dev) | IDE integration (connects everything) |
+| Local inference | Ollama on `localhost:11434` with Apple Metal acceleration |
+| IDE integration | VS Code + Continue.dev for chat, autocomplete, inline edits, and codebase context |
+| Hardware-aware profiles | Automatically selects models by RAM, or accepts explicit profile/model overrides |
+| Safe configuration | Backs up existing Continue config and VS Code settings before writing |
+| Diagnostics | `doctor` checks Ollama, models, LaunchAgent, VS Code, Continue, config, and telemetry |
+| Repair mode | `repair` fixes common stale or missing setup pieces |
+| Offline workflow | `bundle` packages the repo and local Ollama model cache for air-gapped installs |
+| Config validation | `validate-config` checks the generated Continue YAML shape and required roles |
+| Install reports | Writes JSON reports under `~/.localaibundle/` for auditing and troubleshooting |
+| CI coverage | Bash syntax, ShellCheck, whitespace checks, and unit tests run in GitHub Actions |
 
-## Quick start
+## Quick Start
 
 ### Prerequisites
 
 - macOS on Apple Silicon (M1/M2/M3/M4)
-- 16GB RAM minimum (32GB recommended)
-- ~20GB free disk space
-- Internet connection (for initial model downloads only)
+- 16GB RAM minimum, 32GB+ recommended
+- 20GB+ free disk space for the default profile
+- Internet connection for the first model download
 
 ### Install
 
@@ -31,128 +37,152 @@ git clone https://github.com/DevenDucommun/LocalAIbundle.git
 cd LocalAIbundle
 chmod +x install.sh
 
-# Preview what will be installed (no changes made)
+# Preview without making changes
 ./install.sh --dry-run
 
-# Run the full installation (~10-15 min, mostly model downloads)
-./install.sh
+# Install the default local coding stack
+./install.sh install
 ```
 
 ### Verify
 
 ```bash
-# Check all components are running
-./install.sh status
-
-# Run inference speed tests
+./install.sh doctor
 ./install.sh test
 ```
 
-### Start coding
+## Model Profiles
 
-1. Open VS Code: `code /path/to/your/project`
-2. Wait ~10 seconds for Continue.dev to initialize and index your project
-3. Start typing — tab completion suggestions appear automatically
-4. Press **Cmd+L** to open the AI chat panel
-5. Type `@codebase` in chat to give the AI full project context
+The default `auto` profile selects models by RAM. You can also choose a profile explicitly.
 
-## Model tiers
+| Profile | Completion | Chat/Edit | Best For |
+|---------|------------|-----------|----------|
+| `auto` | RAM-based | RAM-based | Most users |
+| `fast` | `qwen2.5-coder:1.5b` | `qwen2.5-coder:3b` | Lightweight laptops |
+| `balanced` | `qwen2.5-coder:1.5b` | `qwen2.5-coder:7b` | 16GB machines |
+| `professional` | `qwen2.5-coder:3b` | `qwen2.5-coder:14b` | Daily coding on 24GB+ |
+| `agentic` | `qwen2.5-coder:3b` | `qwen3-coder:30b` | Larger coding tasks and long-context work |
+| `max` | `qwen2.5-coder:7b` | `qwen2.5-coder:32b` | High-memory machines |
 
-The installer auto-detects your RAM and selects the best models:
+Automatic RAM tiers:
 
-| RAM | Completion | Chat | Quality |
-|-----|-----------|------|---------|
-| 16GB | qwen2.5-coder:1.5b | qwen2.5-coder:7b | Good |
-| 24-32GB | qwen2.5-coder:3b | qwen2.5-coder:14b | Great |
-| 48GB+ | qwen2.5-coder:7b | qwen2.5-coder:32b | Near GPT-4o |
+| RAM | Completion | Chat/Edit |
+|-----|------------|-----------|
+| 16-23GB | `qwen2.5-coder:1.5b` | `qwen2.5-coder:7b` |
+| 24-47GB | `qwen2.5-coder:3b` | `qwen2.5-coder:14b` |
+| 48GB+ | `qwen2.5-coder:7b` | `qwen2.5-coder:32b` |
 
-## Usage
+Example overrides:
 
-| Action | Shortcut | Description |
-|--------|----------|-------------|
-| Tab complete | Just type | Suggestions appear inline as you code |
-| Chat | **Cmd+L** | Ask questions, get explanations |
-| Inline edit | **Cmd+I** | AI rewrites selected code |
-| Codebase context | `@codebase` | Search entire project for relevant code |
-| Open file context | `@open` | Reference currently open files |
-| Terminal context | `@terminal` | Reference recent terminal output |
-| Diff context | `@diff` | Reference uncommitted changes |
+```bash
+./install.sh install --profile agentic
+./install.sh install --chat-model qwen3-coder:30b --completion-model qwen2.5-coder:3b
+```
 
 ## Commands
 
 ```bash
-./install.sh install    # Install and configure everything (default)
-./install.sh status     # Check what's running and installed
-./install.sh test       # Smoke test inference speed and model loading
-./install.sh uninstall  # Remove all components cleanly
-./install.sh --dry-run  # Preview install without making changes
-./install.sh --help     # Show all commands
+./install.sh install        # Install and configure the full stack
+./install.sh doctor         # Diagnose local setup without changing anything
+./install.sh repair         # Fix common setup/configuration issues
+./install.sh status         # Print component status
+./install.sh test           # Run inference smoke tests
+./install.sh validate-config # Validate Continue config for the selected profile
+./install.sh bundle         # Create an offline bundle
+./install.sh uninstall      # Remove LocalAIbundle components
+./install.sh --help         # Show all commands and flags
 ```
 
-## How it works
-
-```
-┌─────────────────────────────────────────────────────┐
-│  VS Code + Continue.dev Extension                    │
-│  (tab completion, chat panel, inline edit)           │
-└────────────────────┬────────────────────────────────┘
-                     │ OpenAI-compatible API
-                     ▼
-┌─────────────────────────────────────────────────────┐
-│  Ollama (localhost:11434)                            │
-│  ├─ qwen2.5-coder:3b   → autocomplete (fast)       │
-│  ├─ qwen2.5-coder:14b  → chat/edit (quality)       │
-│  └─ nomic-embed-text   → codebase indexing          │
-│                                                     │
-│  Metal GPU acceleration · Auto-start on login       │
-└─────────────────────────────────────────────────────┘
-```
-
-All requests stay on `localhost`. No API keys needed. No cloud accounts.
-
-## After installation
-
-Ollama starts automatically on login via a LaunchAgent. If you need to manage it manually:
+Useful install modes:
 
 ```bash
-# Stop Ollama
-pkill ollama
-
-# Start Ollama
-ollama serve
-
-# Update models to latest
-ollama pull qwen2.5-coder:14b
-ollama pull qwen2.5-coder:3b
-
-# List installed models
-ollama list
+./install.sh install --models-only
+./install.sh install --config-only
+./install.sh install --no-vscode
+./install.sh install --no-continue
+./install.sh install --no-launchagent
+./install.sh install --no-model-pull
+./install.sh uninstall --preserve-models
 ```
 
-## Troubleshooting
+## Offline Installs
 
-**Tab completion not working?**
-- Check Ollama is running: `curl http://localhost:11434`
-- Restart VS Code (Continue.dev connects on startup)
-- Check Continue logs: Cmd+Shift+P → "Continue: View Logs"
+Create a bundle on a machine that already has the desired Ollama models:
 
-**Slow responses?**
-- Run `./install.sh test` to check token speed
-- Close memory-heavy apps (models need RAM)
-- Smaller models = faster: edit `~/.continue/config.yaml` to use 1.5b for completion
+```bash
+./install.sh bundle --profile professional --output LocalAIbundle-offline-professional.tar.gz
+```
 
-**Models not loading?**
-- Check disk space: `df -h /`
-- Re-pull: `ollama pull qwen2.5-coder:14b`
+Move the tarball to the offline Mac, then run:
+
+```bash
+./install.sh install --offline LocalAIbundle-offline-professional.tar.gz
+```
+
+The offline bundle includes the installer, docs, manifest, and local Ollama model cache when `~/.ollama/models` exists.
+
+## How It Works
+
+```text
+VS Code + Continue.dev
+  |  chat, edit, autocomplete, @codebase
+  v
+Ollama on localhost:11434
+  |  local model files in ~/.ollama
+  v
+Apple Silicon / Metal GPU
+```
+
+Generated files:
+
+| Path | Purpose |
+|------|---------|
+| `~/.continue/config.yaml` | Continue.dev local model configuration |
+| `~/Library/LaunchAgents/com.localai.ollama.plist` | Ollama auto-start on login |
+| `~/.localaibundle/install-report-*.json` | Install diagnostics and selected model report |
+| `~/.continue/config.yaml.bak.*` | Timestamped backup of previous Continue config |
 
 ## Privacy
 
-- Ollama: no telemetry, no network calls, fully air-gappable
-- Continue.dev: telemetry disabled in VS Code settings
-- All inference runs on-device via Apple Metal GPU
-- Models stored locally in `~/.ollama/`
-- Safe for proprietary/confidential codebases
-- Can operate completely offline after initial install
+- Ollama inference runs locally.
+- Continue is configured to use local Ollama models.
+- Continue telemetry is disabled in VS Code settings.
+- No API keys or cloud accounts are required.
+- After the first install or an offline bundle import, the stack can run without internet.
+
+## Development
+
+Run the same checks as CI:
+
+```bash
+bash -n install.sh
+shellcheck install.sh tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/demo.sh
+python3 -m py_compile scripts/*.py
+bash tests/run.sh
+bash tests/install-sandbox.sh
+bash scripts/package-release.sh
+git diff --check
+```
+
+The unit test harness uses `LOCALAIBUNDLE_SOURCE_ONLY=true` plus `LOCALAIBUNDLE_TEST_*` hardware overrides so model selection and config generation can be tested on non-macOS CI runners without touching a real installation.
+
+The sandbox install test creates a temporary `HOME` and fake `ollama`, `code`, `curl`, `brew`, and `launchctl` commands. It runs a non-dry-run install, doctor, and inference smoke test without modifying the developer machine.
+
+Create release artifacts:
+
+```bash
+bash scripts/package-release.sh
+```
+
+This writes `dist/LocalAIbundle-<version>.tar.gz` and a matching `.sha256` checksum.
+
+Record a terminal demo:
+
+```bash
+bash scripts/demo.sh
+```
+
+Manual macOS QA steps live in [docs/macos-qa.md](docs/macos-qa.md).
 
 ## Uninstall
 
@@ -160,4 +190,4 @@ ollama list
 ./install.sh uninstall
 ```
 
-Removes: Ollama app, all models (~11GB), LaunchAgent, Continue.dev extension and config. Does not remove VS Code itself.
+Removes the user-local Ollama app, downloaded models, LocalAIbundle LaunchAgent, Continue.dev extension, and Continue config. It does not remove VS Code itself.
