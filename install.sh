@@ -121,6 +121,10 @@ require_disk_space() {
     fi
 
     if [[ "$available" -lt "$required" ]]; then
+        if $DRY_RUN; then
+            warn "Disk preflight: ${MODEL_TIER} profile needs at least $(human_bytes "$required"), available $(human_bytes "$available")"
+            return
+        fi
         err "Not enough free disk space for ${MODEL_TIER} profile: need at least $(human_bytes "$required"), available $(human_bytes "$available")"
         exit 1
     fi
@@ -135,6 +139,11 @@ url_reachable() {
 
 warn_network_preflight() {
     if [[ -n "$OFFLINE_BUNDLE" || ! $PULL_MODEL_FILES ]]; then
+        return
+    fi
+
+    if $DRY_RUN; then
+        dry "check network reachability for first-install downloads"
         return
     fi
 
@@ -308,8 +317,13 @@ detect_hardware() {
         RAM_GB="$LOCALAIBUNDLE_TEST_RAM_GB"
     else
         local ram_bytes
-        ram_bytes=$(sysctl -n hw.memsize)
-        RAM_GB=$((ram_bytes / 1073741824))
+        ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+        if [[ "$ram_bytes" =~ ^[0-9]+$ && "$ram_bytes" -gt 0 ]]; then
+            RAM_GB=$((ram_bytes / 1073741824))
+        else
+            RAM_GB=16
+            warn "Could not determine RAM; defaulting to the standard profile"
+        fi
     fi
     CPU_BRAND="${LOCALAIBUNDLE_TEST_CPU_BRAND:-$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")}"
     GPU_CORES="${LOCALAIBUNDLE_TEST_GPU_CORES:-$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Total Number of Cores" | awk -F': ' '{print $2}' | head -1)}"
@@ -325,6 +339,39 @@ detect_hardware() {
     fi
 
     apply_profile
+}
+
+detect_hardware_best_effort() {
+    info "Detecting hardware..."
+
+    ARCH="${LOCALAIBUNDLE_TEST_UNAME_M:-$(uname -m 2>/dev/null || echo unknown)}"
+
+    if [[ -n "${LOCALAIBUNDLE_TEST_RAM_GB:-}" ]]; then
+        RAM_GB="$LOCALAIBUNDLE_TEST_RAM_GB"
+    else
+        local ram_bytes
+        ram_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+        if [[ "$ram_bytes" =~ ^[0-9]+$ && "$ram_bytes" -gt 0 ]]; then
+            RAM_GB=$((ram_bytes / 1073741824))
+        else
+            RAM_GB=0
+        fi
+    fi
+
+    CPU_BRAND="${LOCALAIBUNDLE_TEST_CPU_BRAND:-$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown")}"
+    GPU_CORES="${LOCALAIBUNDLE_TEST_GPU_CORES:-$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Total Number of Cores" | awk -F': ' '{print $2}' | head -1)}"
+
+    if [[ "$RAM_GB" -gt 0 ]]; then
+        apply_profile
+    else
+        MODEL_TIER="unknown"
+        COMPLETION_MODEL="${COMPLETION_MODEL_OVERRIDE:-unknown}"
+        CHAT_MODEL="${CHAT_MODEL_OVERRIDE:-unknown}"
+        EMBED_MODEL="${EMBED_MODEL_OVERRIDE:-unknown}"
+        TOTAL_MODEL_SIZE="unknown"
+        TOTAL_MODEL_BYTES=0
+        warn "Hardware detection incomplete; issue report will include partial hardware details"
+    fi
 }
 
 # ─── Dependency Installation ──────────────────────────────────────────────────
@@ -958,9 +1005,9 @@ cmd_validate_config() {
 
 cmd_issue_report() {
     header
-    detect_hardware
+    detect_hardware_best_effort
 
-    local output tmp_dir report_json status_json doctor_json logs_file archive
+    local output tmp_dir report_json status_json doctor_json logs_file archive status_err doctor_err
     output="${ISSUE_REPORT_OUTPUT:-LocalAIbundle-issue-report-$(timestamp).tar.gz}"
     tmp_dir=$(mktemp -d)
 
@@ -968,6 +1015,8 @@ cmd_issue_report() {
     status_json="$tmp_dir/status.json"
     doctor_json="$tmp_dir/doctor.json"
     logs_file="$tmp_dir/ollama-server.log"
+    status_err="$tmp_dir/status.err"
+    doctor_err="$tmp_dir/doctor.err"
 
     info "Collecting redacted issue report..."
 
@@ -980,8 +1029,12 @@ cmd_issue_report() {
     fi
     [[ -f "$report_json" ]] || printf '{}\n' > "$report_json"
 
-    JSON_OUTPUT=true cmd_status | redact_home > "$status_json" || true
-    JSON_OUTPUT=true cmd_doctor | redact_home > "$doctor_json" || true
+    if ! JSON_OUTPUT=true cmd_status 2>"$status_err" | redact_home > "$status_json"; then
+        printf '{\n  "error": "status failed",\n  "stderr": %s\n}\n' "$(json_quote "$(redact_home < "$status_err")")" > "$status_json"
+    fi
+    if ! JSON_OUTPUT=true cmd_doctor 2>"$doctor_err" | redact_home > "$doctor_json"; then
+        printf '{\n  "error": "doctor failed",\n  "stderr": %s\n}\n' "$(json_quote "$(redact_home < "$doctor_err")")" > "$doctor_json"
+    fi
 
     if [[ -f "$HOME/.ollama/logs/server.log" ]]; then
         tail -n 300 "$HOME/.ollama/logs/server.log" | redact_home > "$logs_file"
@@ -996,6 +1049,7 @@ This archive is intended for troubleshooting. Home directory paths are redacted 
 Review contents before sharing.
 REPORT
 
+    rm -f "$status_err" "$doctor_err"
     archive="$output"
     tar -C "$tmp_dir" -czf "$archive" .
     rm -rf "$tmp_dir"

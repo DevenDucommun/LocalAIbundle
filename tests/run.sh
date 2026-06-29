@@ -43,6 +43,9 @@ test_auto_profiles() {
 
     output=$(LOCALAIBUNDLE_TEST_RAM_GB=64 run_sourced 'detect_hardware >/dev/null; printf "%s|%s|%s|%s" "$MODEL_TIER" "$COMPLETION_MODEL" "$CHAT_MODEL" "$TOTAL_MODEL_SIZE"')
     assert_eq "power|qwen2.5-coder:7b|qwen2.5-coder:32b|~25GB" "$output" "auto profile selects power on 64GB"
+
+    output=$(run_sourced 'sysctl() { return 1; }; detect_hardware >/dev/null; printf "%s|%s|%s" "$RAM_GB" "$MODEL_TIER" "$TOTAL_MODEL_SIZE"')
+    assert_eq "16|standard|~6GB" "$output" "hardware detection falls back to standard profile when RAM is unavailable"
 }
 
 test_parser_modes() {
@@ -101,7 +104,23 @@ test_helper_resolution() {
     assert_eq "$tmp_root/scripts/example.py" "$output" "helper_script honors LOCALAIBUNDLE_ROOT"
 }
 
+test_preflight_modes() {
+    local output
+    output=$(run_sourced '
+        DRY_RUN=true
+        PULL_MODEL_FILES=true
+        MODEL_TIER=professional
+        TOTAL_MODEL_SIZE="~11.2GB"
+        TOTAL_MODEL_BYTES=$((13 * 1024 * 1024 * 1024))
+        available_disk_bytes() { echo 1024; }
+        require_disk_space >/dev/null
+        printf "continued"
+    ')
+    assert_eq "continued" "$output" "dry-run disk preflight warns without exiting"
+}
+
 test_auto_profiles
 test_parser_modes
 test_continue_config_generation
 test_helper_resolution
+test_preflight_modes
