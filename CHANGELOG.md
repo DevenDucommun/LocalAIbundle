@@ -11,6 +11,12 @@
 - `--preserve-config` uninstall flag.
 - Model profile guide, manual setup comparison, and sample install report docs.
 
+### Fixed
+
+- Dry-run previews no longer fail on disk preflight or perform live network checks.
+- Hardware detection falls back to the standard profile when RAM probing is restricted.
+- Issue reports now collect best-effort diagnostics even when hardware detection is incomplete.
+
 ## 1.1.1
 
 ### Fixed

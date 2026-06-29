@@ -20,6 +20,7 @@ LocalAIbundle installs and maintains a fully local AI coding stack for macOS App
 | Offline workflow | `bundle` packages the repo and local Ollama model cache for air-gapped installs |
 | Config validation | `validate-config` checks the generated Continue YAML shape and required roles |
 | Install reports | Writes JSON reports under `~/.localaibundle/` for auditing and troubleshooting |
+| Support bundles | `issue-report` creates a redacted archive for troubleshooting |
 | CI coverage | Bash syntax, ShellCheck, whitespace checks, and unit tests run in GitHub Actions |
 
 ## Quick Start
@@ -161,6 +162,7 @@ Generated files:
 | `~/Library/LaunchAgents/com.localai.ollama.plist` | Ollama auto-start on login |
 | `~/.localaibundle/install-report-*.json` | Install diagnostics and selected model report |
 | `~/.continue/config.yaml.bak.*` | Timestamped backup of previous Continue config |
+| `LocalAIbundle-issue-report-*.tar.gz` | Redacted local troubleshooting archive, only when requested |
 
 ## Privacy
 
@@ -176,7 +178,7 @@ Run the same checks as CI:
 
 ```bash
 bash -n install.sh
-shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
+shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/package-dmg.sh scripts/notarize-artifact.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
 python3 -m py_compile scripts/*.py
 bash tests/run.sh
 bash tests/install-sandbox.sh
@@ -205,7 +207,7 @@ cp packaging/homebrew/localaibundle.rb /path/to/homebrew-localai/Formula/
 # Native macOS package, unsigned unless SIGN_IDENTITY is set
 bash scripts/package-pkg.sh
 
-# DMG containing the package installer
+# DMG containing the package installer, unsigned until notarized
 bash scripts/package-dmg.sh
 ```
 
