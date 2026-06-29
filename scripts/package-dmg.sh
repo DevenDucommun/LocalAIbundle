@@ -52,9 +52,9 @@ hdiutil create \
     "$DMG_PATH"
 
 if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$DMG_PATH" > "$DMG_PATH.sha256"
+    (cd "$DIST_DIR" && shasum -a 256 "$(basename "$DMG_PATH")") > "$DMG_PATH.sha256"
 else
-    sha256sum "$DMG_PATH" > "$DMG_PATH.sha256"
+    (cd "$DIST_DIR" && sha256sum "$(basename "$DMG_PATH")") > "$DMG_PATH.sha256"
 fi
 
 printf 'Created %s\n' "$DMG_PATH"

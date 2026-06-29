@@ -63,9 +63,9 @@ fi
 gzip -n -c "$TMP_DIR/${PKG_NAME}.tar" > "$PKG_PATH"
 
 if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$PKG_PATH" > "$PKG_PATH.sha256"
+    (cd "$DIST_DIR" && shasum -a 256 "$(basename "$PKG_PATH")") > "$PKG_PATH.sha256"
 else
-    sha256sum "$PKG_PATH" > "$PKG_PATH.sha256"
+    (cd "$DIST_DIR" && sha256sum "$(basename "$PKG_PATH")") > "$PKG_PATH.sha256"
 fi
 
 SHA256=$(awk '{print $1}' "$PKG_PATH.sha256")
