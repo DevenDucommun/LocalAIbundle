@@ -55,6 +55,9 @@ test_parser_modes() {
 
     output=$(run_sourced 'parse_args uninstall --preserve-models; printf "%s|%s" "$CMD" "$PRESERVE_MODELS"')
     assert_eq "uninstall|true" "$output" "parser handles preserve-models"
+
+    output=$(run_sourced 'parse_args self-test --json --no-network; printf "%s|%s|%s" "$CMD" "$JSON_OUTPUT" "$SELF_TEST_NO_NETWORK"')
+    assert_eq "self-test|true|true" "$output" "parser handles self-test json and no-network flags"
 }
 
 test_continue_config_generation() {
@@ -81,6 +84,18 @@ test_continue_config_generation() {
     assert_eq "1|1|1|1|1|0" "$output" "configure_continue writes valid v1 config, disables telemetry, and backs up existing config"
 }
 
+test_helper_resolution() {
+    local output tmp_root
+    tmp_root=$(mktemp -d)
+    mkdir -p "$tmp_root/scripts"
+    printf "helper\n" > "$tmp_root/scripts/example.py"
+
+    output=$(LOCALAIBUNDLE_ROOT="$tmp_root" run_sourced 'helper_script example.py')
+    rm -rf "$tmp_root"
+    assert_eq "$tmp_root/scripts/example.py" "$output" "helper_script honors LOCALAIBUNDLE_ROOT"
+}
+
 test_auto_profiles
 test_parser_modes
 test_continue_config_generation
+test_helper_resolution

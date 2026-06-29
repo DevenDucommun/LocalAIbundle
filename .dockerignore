@@ -1,0 +1,7 @@
+.git
+dist
+docs/roadmap-local.md
+*.tar.gz
+*.pkg
+__pycache__
+*.pyc

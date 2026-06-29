@@ -21,7 +21,7 @@ jobs:
         run: bash -n install.sh
 
       - name: ShellCheck
-        run: shellcheck install.sh tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/demo.sh
+        run: shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
 
       - name: Python syntax
         run: python3 -m py_compile scripts/*.py
@@ -37,3 +37,6 @@ jobs:
 
       - name: Package release
         run: bash scripts/package-release.sh
+
+      - name: Self-test dry run
+        run: bash install.sh self-test --dry-run --no-network

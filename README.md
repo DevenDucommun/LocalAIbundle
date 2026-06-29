@@ -1,6 +1,7 @@
 # LocalAIbundle
 
 [![CI](https://github.com/DevenDucommun/LocalAIbundle/actions/workflows/ci.yml/badge.svg)](https://github.com/DevenDucommun/LocalAIbundle/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DevenDucommun/LocalAIbundle)](https://github.com/DevenDucommun/LocalAIbundle/releases)
 
 LocalAIbundle installs and maintains a fully local AI coding stack for macOS Apple Silicon. It sets up Ollama, coding models, VS Code, Continue.dev, diagnostics, repair tooling, and offline bundle support with no cloud accounts or API keys.
 
@@ -44,11 +45,15 @@ chmod +x install.sh
 ./install.sh install
 ```
 
+Package-manager installs expose the same interface as `localaibundle`. From a clone, you can use `bin/localaibundle` as that stable command wrapper.
+
 ### Verify
 
 ```bash
 ./install.sh doctor
+./install.sh doctor --json
 ./install.sh test
+./install.sh self-test --no-network
 ```
 
 ## Model Profiles
@@ -86,7 +91,9 @@ Example overrides:
 ./install.sh doctor         # Diagnose local setup without changing anything
 ./install.sh repair         # Fix common setup/configuration issues
 ./install.sh status         # Print component status
+./install.sh status --json  # Print machine-readable status
 ./install.sh test           # Run inference smoke tests
+./install.sh self-test      # Run non-mutating installer/release checks
 ./install.sh validate-config # Validate Continue config for the selected profile
 ./install.sh bundle         # Create an offline bundle
 ./install.sh uninstall      # Remove LocalAIbundle components
@@ -120,6 +127,14 @@ Move the tarball to the offline Mac, then run:
 ```
 
 The offline bundle includes the installer, docs, manifest, and local Ollama model cache when `~/.ollama/models` exists.
+
+## Documentation
+
+- [FAQ](docs/faq.md)
+- [Privacy and security model](docs/privacy.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Packaging](docs/packaging.md)
+- [macOS QA checklist](docs/macos-qa.md)
 
 ## How It Works
 
@@ -156,7 +171,7 @@ Run the same checks as CI:
 
 ```bash
 bash -n install.sh
-shellcheck install.sh tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/demo.sh
+shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
 python3 -m py_compile scripts/*.py
 bash tests/run.sh
 bash tests/install-sandbox.sh
@@ -174,7 +189,28 @@ Create release artifacts:
 bash scripts/package-release.sh
 ```
 
-This writes `dist/LocalAIbundle-<version>.tar.gz` and a matching `.sha256` checksum.
+This writes `dist/LocalAIbundle-<version>.tar.gz`, a matching `.sha256` checksum, and a release manifest.
+
+Package scaffolding:
+
+```bash
+# Developer-friendly package-manager path
+cp packaging/homebrew/localaibundle.rb /path/to/homebrew-localai/Formula/
+
+# Native macOS package, unsigned unless SIGN_IDENTITY is set
+bash scripts/package-pkg.sh
+```
+
+Homebrew tap instructions should be published only after the tap exists and its formula passes `brew test`.
+
+Docker can run Linux-portable checks:
+
+```bash
+docker build -f Dockerfile.test -t localaibundle-test .
+docker run --rm localaibundle-test
+```
+
+Docker does not validate macOS LaunchAgents, VS Code app layout, Apple Silicon detection, signing, or notarization.
 
 Record a terminal demo:
 

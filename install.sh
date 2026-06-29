@@ -5,8 +5,10 @@ set -euo pipefail
 # Installs Ollama, code models, Continue.dev, and configures everything
 # Zero cloud dependencies. All inference stays on your machine.
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 DRY_RUN=false
+JSON_OUTPUT=false
+SELF_TEST_NO_NETWORK=false
 PROFILE="auto"
 INSTALL_VSCODE=true
 INSTALL_CONTINUE=true
@@ -43,11 +45,11 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${GREEN}[✓]${NC} $1"; }
-warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+log()  { $JSON_OUTPUT || echo -e "${GREEN}[✓]${NC} $1"; }
+warn() { $JSON_OUTPUT || echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1" >&2; }
-info() { echo -e "${BLUE}[→]${NC} $1"; }
-dry()  { echo -e "${DIM}[dry-run]${NC} would: $1"; }
+info() { $JSON_OUTPUT || echo -e "${BLUE}[→]${NC} $1"; }
+dry()  { $JSON_OUTPUT || echo -e "${DIM}[dry-run]${NC} would: $1"; }
 
 timestamp() {
     date +"%Y%m%d%H%M%S"
@@ -478,6 +480,120 @@ print_check() {
     esac
 }
 
+json_quote() {
+    python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
+DOCTOR_CHECKS=()
+DOCTOR_FAILURES=0
+DOCTOR_WARNINGS=0
+
+add_doctor_check() {
+    local name="$1"
+    local label="$2"
+    local status="$3"
+    local detail="${4:-}"
+
+    DOCTOR_CHECKS+=("{\"name\":$(json_quote "$name"),\"label\":$(json_quote "$label"),\"status\":$(json_quote "$status"),\"detail\":$(json_quote "$detail")}")
+    case "$status" in
+        fail) DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1)) ;;
+        warn) DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1)) ;;
+    esac
+}
+
+collect_doctor_checks() {
+    DOCTOR_CHECKS=()
+    DOCTOR_FAILURES=0
+    DOCTOR_WARNINGS=0
+
+    local ollama_bin
+    if ollama_bin=$(resolve_ollama_binary); then
+        add_doctor_check "ollama_cli" "Ollama CLI" "ok" "$ollama_bin"
+    else
+        add_doctor_check "ollama_cli" "Ollama CLI" "fail" "not found"
+    fi
+
+    if curl -s http://localhost:11434/api/tags &>/dev/null; then
+        add_doctor_check "ollama_server" "Ollama server" "ok" "running on localhost:11434"
+    else
+        add_doctor_check "ollama_server" "Ollama server" "warn" "not running"
+    fi
+
+    if launchagent_ok; then
+        add_doctor_check "ollama_launchagent" "Ollama LaunchAgent" "ok" "$(launchagent_plist)"
+    else
+        add_doctor_check "ollama_launchagent" "Ollama LaunchAgent" "warn" "missing or stale"
+    fi
+
+    local model
+    for model in "$COMPLETION_MODEL" "$CHAT_MODEL" "$EMBED_MODEL"; do
+        if model_installed "$model"; then
+            add_doctor_check "model_installed" "Model installed" "ok" "$model"
+        else
+            add_doctor_check "model_installed" "Model installed" "warn" "$model missing"
+        fi
+    done
+
+    if command -v code &>/dev/null; then
+        add_doctor_check "vscode_cli" "VS Code CLI" "ok" "$(command -v code)"
+    else
+        add_doctor_check "vscode_cli" "VS Code CLI" "warn" "not found"
+    fi
+
+    if code --list-extensions 2>/dev/null | grep -qi "continue"; then
+        add_doctor_check "continue_extension" "Continue.dev extension" "ok" "installed"
+    else
+        add_doctor_check "continue_extension" "Continue.dev extension" "warn" "missing"
+    fi
+
+    if continue_config_ok; then
+        add_doctor_check "continue_config" "Continue config" "ok" "$HOME/.continue/config.yaml"
+        if validate_continue_config "$HOME/.continue/config.yaml" 2>/dev/null; then
+            add_doctor_check "continue_config_validation" "Continue config validation" "ok" "passed"
+        else
+            add_doctor_check "continue_config_validation" "Continue config validation" "warn" "failed"
+        fi
+    else
+        add_doctor_check "continue_config" "Continue config" "warn" "missing or not matching selected profile"
+    fi
+
+    if continue_telemetry_disabled; then
+        add_doctor_check "continue_telemetry" "Continue telemetry setting" "ok" "disabled"
+    else
+        add_doctor_check "continue_telemetry" "Continue telemetry setting" "warn" "not confirmed disabled"
+    fi
+}
+
+print_doctor_json() {
+    local checks_json
+    checks_json="$(IFS=,; echo "${DOCTOR_CHECKS[*]}")"
+
+    cat << JSON
+{
+  "name": "LocalAIbundle",
+  "version": $(json_quote "$VERSION"),
+  "profile": $(json_quote "$PROFILE"),
+  "model_tier": $(json_quote "$MODEL_TIER"),
+  "hardware": {
+    "arch": $(json_quote "$ARCH"),
+    "cpu": $(json_quote "$CPU_BRAND"),
+    "gpu_cores": $(json_quote "${GPU_CORES:-unknown}"),
+    "ram_gb": $RAM_GB
+  },
+  "models": {
+    "completion": $(json_quote "$COMPLETION_MODEL"),
+    "chat": $(json_quote "$CHAT_MODEL"),
+    "embedding": $(json_quote "$EMBED_MODEL")
+  },
+  "summary": {
+    "failures": $DOCTOR_FAILURES,
+    "warnings": $DOCTOR_WARNINGS
+  },
+  "checks": [$checks_json]
+}
+JSON
+}
+
 run_doctor_checks() {
     local failures=0 warnings=0
     local ollama_bin
@@ -560,8 +676,15 @@ run_doctor_checks() {
 }
 
 cmd_doctor() {
-    header
+    if ! $JSON_OUTPUT; then
+        header
+    fi
     detect_hardware
+    if $JSON_OUTPUT; then
+        collect_doctor_checks
+        print_doctor_json
+        return "$DOCTOR_FAILURES"
+    fi
     info "Running diagnostics..."
     echo ""
     run_doctor_checks
@@ -603,7 +726,24 @@ cmd_repair() {
 }
 
 script_dir() {
-    cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
+    if [[ -n "${LOCALAIBUNDLE_ROOT:-}" ]]; then
+        cd "$LOCALAIBUNDLE_ROOT" && pwd
+        return
+    fi
+
+    local source dir link
+    source="${BASH_SOURCE[0]}"
+    while [[ -L "$source" ]]; do
+        dir="$(cd -P "$(dirname "$source")" && pwd)"
+        link="$(readlink "$source")"
+        if [[ "$link" == /* ]]; then
+            source="$link"
+        else
+            source="$dir/$link"
+        fi
+    done
+
+    cd -P "$(dirname "$source")" && pwd
 }
 
 helper_script() {
@@ -738,7 +878,7 @@ cmd_test() {
         speed=$(echo "$result" | python3 "$(helper_script ollama-json.py)" generate-stat speed 2>/dev/null)
         if [[ "$tokens" -gt 0 ]] 2>/dev/null; then
             log "Completion: ${tokens} tokens in ${duration}s (${speed} tok/s)"
-            if (( $(echo "$speed < 20" | bc -l) )); then
+            if awk "BEGIN { exit !($speed < 20) }"; then
                 warn "  Speed below 20 tok/s — autocomplete may feel sluggish"
             fi
         else
@@ -803,6 +943,93 @@ cmd_test() {
         echo -e "${GREEN}${BOLD}  ✓ All tests passed. Your local AI is ready.${NC}"
     else
         echo -e "${RED}${BOLD}  ✗ ${failures} test(s) failed.${NC}"
+        exit 1
+    fi
+}
+
+run_self_test_step() {
+    local label="$1"
+    shift
+
+    if "$@"; then
+        log "$label"
+        return 0
+    fi
+
+    err "$label failed"
+    return 1
+}
+
+cmd_self_test() {
+    header
+    info "Running LocalAIbundle self-test..."
+    if $SELF_TEST_NO_NETWORK; then
+        info "Network-dependent checks disabled"
+    fi
+    echo ""
+
+    local root failures shell_files
+    root=$(script_dir)
+    failures=0
+    shell_files=("$root/install.sh")
+
+    [[ -f "$root/bin/localaibundle" ]] && shell_files+=("$root/bin/localaibundle")
+    [[ -f "$root/tests/run.sh" ]] && shell_files+=("$root/tests/run.sh")
+    [[ -f "$root/tests/install-sandbox.sh" ]] && shell_files+=("$root/tests/install-sandbox.sh")
+    [[ -f "$root/scripts/package-release.sh" ]] && shell_files+=("$root/scripts/package-release.sh")
+    [[ -f "$root/scripts/package-pkg.sh" ]] && shell_files+=("$root/scripts/package-pkg.sh")
+    [[ -f "$root/scripts/notarize-pkg.sh" ]] && shell_files+=("$root/scripts/notarize-pkg.sh")
+    [[ -f "$root/scripts/demo.sh" ]] && shell_files+=("$root/scripts/demo.sh")
+    [[ -f "$root/scripts/docker-test.sh" ]] && shell_files+=("$root/scripts/docker-test.sh")
+
+    if $DRY_RUN; then
+        dry "run bash syntax checks"
+        dry "run ShellCheck when installed"
+        dry "compile Python helper scripts"
+        dry "run unit tests"
+        dry "run sandbox install test"
+        dry "package release tarball"
+        return
+    fi
+
+    run_self_test_step "Bash syntax" bash -n "$root/install.sh" || failures=$((failures + 1))
+
+    if command -v shellcheck >/dev/null 2>&1; then
+        run_self_test_step "ShellCheck" shellcheck "${shell_files[@]}" || failures=$((failures + 1))
+    else
+        warn "ShellCheck not installed; skipping"
+    fi
+
+    if compgen -G "$root/scripts/*.py" >/dev/null; then
+        # shellcheck disable=SC2016
+        run_self_test_step "Python syntax" bash -c 'python3 -m py_compile "$1"/scripts/*.py' _ "$root" || failures=$((failures + 1))
+    else
+        warn "No Python helper scripts found; skipping Python syntax"
+    fi
+
+    if [[ -x "$root/tests/run.sh" || -f "$root/tests/run.sh" ]]; then
+        run_self_test_step "Unit tests" bash "$root/tests/run.sh" || failures=$((failures + 1))
+    else
+        warn "Unit tests not found; skipping"
+    fi
+
+    if [[ -x "$root/tests/install-sandbox.sh" || -f "$root/tests/install-sandbox.sh" ]]; then
+        run_self_test_step "Sandbox install test" bash "$root/tests/install-sandbox.sh" || failures=$((failures + 1))
+    else
+        warn "Sandbox install test not found; skipping"
+    fi
+
+    if [[ -x "$root/scripts/package-release.sh" || -f "$root/scripts/package-release.sh" ]]; then
+        run_self_test_step "Package release" bash "$root/scripts/package-release.sh" || failures=$((failures + 1))
+    else
+        warn "Package release script not found; skipping"
+    fi
+
+    echo ""
+    if [[ $failures -eq 0 ]]; then
+        echo -e "${GREEN}${BOLD}  ✓ Self-test passed.${NC}"
+    else
+        echo -e "${RED}${BOLD}  ✗ Self-test failed with ${failures} failing step(s).${NC}"
         exit 1
     fi
 }
@@ -931,7 +1158,7 @@ configure_continue() {
 # All models run locally via Ollama. No cloud connections.
 
 name: LocalAIbundle
-version: 1.0.0
+version: ${VERSION}
 schema: v1
 
 models:
@@ -1106,7 +1333,51 @@ print_summary() {
 
 # ─── Status Command ───────────────────────────────────────────────────────────
 
+cmd_status_json() {
+    local ollama_bin ollama_cli ollama_server vscode_cli continue_extension continue_config telemetry_disabled models_json
+
+    ollama_bin=$(resolve_ollama_binary 2>/dev/null || true)
+    [[ -n "$ollama_bin" ]] && ollama_cli=true || ollama_cli=false
+    curl -s http://localhost:11434/api/tags &>/dev/null && ollama_server=true || ollama_server=false
+    command -v code &>/dev/null && vscode_cli=true || vscode_cli=false
+    code --list-extensions 2>/dev/null | grep -qi "continue" && continue_extension=true || continue_extension=false
+    [[ -f "$HOME/.continue/config.yaml" ]] && continue_config=true || continue_config=false
+    continue_telemetry_disabled && telemetry_disabled=true || telemetry_disabled=false
+
+    models_json="[]"
+    if [[ -n "$ollama_bin" ]]; then
+        models_json=$("$ollama_bin" list 2>/dev/null | awk 'NR > 1 {print $1}' | python3 -c 'import json, sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')
+    fi
+
+    cat << JSON
+{
+  "name": "LocalAIbundle",
+  "version": $(json_quote "$VERSION"),
+  "ollama": {
+    "cli_installed": $ollama_cli,
+    "binary": $(json_quote "$ollama_bin"),
+    "server_running": $ollama_server,
+    "models": $models_json
+  },
+  "vscode": {
+    "cli_installed": $vscode_cli,
+    "continue_extension_installed": $continue_extension,
+    "continue_telemetry_disabled": $telemetry_disabled
+  },
+  "continue": {
+    "config_exists": $continue_config,
+    "config_path": $(json_quote "$HOME/.continue/config.yaml")
+  }
+}
+JSON
+}
+
 cmd_status() {
+    if $JSON_OUTPUT; then
+        cmd_status_json
+        return
+    fi
+
     header
     info "Checking LocalAIbundle status..."
     echo ""
@@ -1311,6 +1582,7 @@ usage() {
     echo "  repair        Repair common installation/configuration issues"
     echo "  status        Check current installation status"
     echo "  test          Run inference smoke tests (speed + correctness)"
+    echo "  self-test     Run non-mutating installer/release checks"
     echo "  validate-config Validate the generated Continue config"
     echo "  bundle        Create an offline bundle from this repo and local model cache"
     echo "  uninstall     Remove all components"
@@ -1327,6 +1599,8 @@ usage() {
     echo ""
     echo "Flags:"
     echo "  --dry-run                    Show planned actions without making changes"
+    echo "  --json                       Emit machine-readable JSON for supported commands"
+    echo "  --no-network                 Disable network-dependent self-test checks"
     echo "  --profile <name>             Choose a model profile"
     echo "  --completion-model <model>   Override autocomplete model"
     echo "  --chat-model <model>         Override chat/edit model"
@@ -1357,12 +1631,20 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            install|doctor|repair|status|test|validate-config|bundle|uninstall)
+            install|doctor|repair|status|test|self-test|validate-config|bundle|uninstall)
                 CMD="$1"
                 shift
                 ;;
             --dry-run)
                 DRY_RUN=true
+                shift
+                ;;
+            --json)
+                JSON_OUTPUT=true
+                shift
+                ;;
+            --no-network)
+                SELF_TEST_NO_NETWORK=true
                 shift
                 ;;
             --profile)
@@ -1492,6 +1774,7 @@ dispatch() {
         repair)    cmd_repair ;;
         status)    cmd_status ;;
         test)      cmd_test ;;
+        self-test) cmd_self_test ;;
         validate-config) cmd_validate_config ;;
         bundle)    cmd_bundle ;;
         uninstall) cmd_uninstall ;;
