@@ -1,0 +1,32 @@
+{
+  "name": "LocalAIbundle",
+  "version": "1.2.0",
+  "timestamp": "20260629120000",
+  "profile": "professional",
+  "model_tier": "professional",
+  "hardware": {
+    "arch": "arm64",
+    "cpu": "Apple Silicon",
+    "gpu_cores": "16",
+    "ram_gb": 32
+  },
+  "models": {
+    "completion": "qwen2.5-coder:3b",
+    "chat": "qwen2.5-coder:14b",
+    "embedding": "nomic-embed-text",
+    "total_size": "~11.2GB"
+  },
+  "ollama": {
+    "binary": "~/Applications/Ollama.app/Contents/Resources/ollama",
+    "version": "ollama version redacted",
+    "server_running": true,
+    "launchagent_ok": true
+  },
+  "vscode": {
+    "installed": true,
+    "continue_installed": true
+  },
+  "continue": {
+    "config_ok": true
+  }
+}

@@ -17,6 +17,14 @@ This shows the selected profile, model downloads, paths, and planned writes with
 
 Use JSON output when attaching diagnostics to an issue or automating checks.
 
+Create a redacted troubleshooting archive:
+
+```bash
+./install.sh issue-report --issue-output localai-report.tgz
+```
+
+Review the archive before sharing. Home directory paths are redacted to `~`.
+
 ## Repair Common Problems
 
 ```bash

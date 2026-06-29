@@ -1,6 +1,17 @@
 # Changelog
 
-## 1.1.1 - Unreleased
+## 1.2.0 - Unreleased
+
+### Added
+
+- Disk-space preflight before model downloads.
+- Network preflight warnings for first-install downloads.
+- Model cache size reporting in status and doctor output.
+- `issue-report` command for redacted troubleshooting bundles.
+- `--preserve-config` uninstall flag.
+- Model profile guide, manual setup comparison, and sample install report docs.
+
+## 1.1.1
 
 ### Fixed
 

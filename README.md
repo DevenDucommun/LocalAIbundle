@@ -94,6 +94,7 @@ Example overrides:
 ./install.sh status --json  # Print machine-readable status
 ./install.sh test           # Run inference smoke tests
 ./install.sh self-test      # Run non-mutating installer/release checks
+./install.sh issue-report   # Create a redacted troubleshooting archive
 ./install.sh validate-config # Validate Continue config for the selected profile
 ./install.sh bundle         # Create an offline bundle
 ./install.sh uninstall      # Remove LocalAIbundle components
@@ -110,6 +111,8 @@ Useful install modes:
 ./install.sh install --no-launchagent
 ./install.sh install --no-model-pull
 ./install.sh uninstall --preserve-models
+./install.sh uninstall --preserve-config
+./install.sh issue-report --issue-output localai-report.tgz
 ```
 
 ## Offline Installs
@@ -133,6 +136,8 @@ The offline bundle includes the installer, docs, manifest, and local Ollama mode
 - [FAQ](docs/faq.md)
 - [Privacy and security model](docs/privacy.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Model profile guide](docs/profiles.md)
+- [Manual setup comparison](docs/comparison.md)
 - [Packaging](docs/packaging.md)
 - [macOS QA checklist](docs/macos-qa.md)
 

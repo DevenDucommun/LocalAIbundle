@@ -5,7 +5,7 @@ set -euo pipefail
 # Installs Ollama, code models, Continue.dev, and configures everything
 # Zero cloud dependencies. All inference stays on your machine.
 
-VERSION="1.1.1"
+VERSION="1.2.0"
 DRY_RUN=false
 JSON_OUTPUT=false
 SELF_TEST_NO_NETWORK=false
@@ -18,9 +18,11 @@ START_OLLAMA=true
 PULL_MODEL_FILES=true
 WRITE_CONFIG=true
 PRESERVE_MODELS=false
+PRESERVE_CONFIG=false
 OFFLINE_BUNDLE=""
 BUNDLE_OUTPUT=""
 REPORT_DIR="${LOCALAIBUNDLE_REPORT_DIR:-$HOME/.localaibundle}"
+ISSUE_REPORT_OUTPUT=""
 REPORT_FILE=""
 MODEL_TIER=""
 COMPLETION_MODEL=""
@@ -33,6 +35,7 @@ COMPLETION_MODEL_SIZE=""
 CHAT_MODEL_SIZE=""
 EMBED_MODEL_SIZE="~274MB"
 TOTAL_MODEL_SIZE=""
+TOTAL_MODEL_BYTES=0
 RAM_GB=0
 CPU_BRAND=""
 GPU_CORES=""
@@ -63,6 +66,91 @@ backup_file() {
         cp "$file" "$backup"
         log "Backed up existing $(basename "$file") to $backup"
     fi
+}
+
+human_bytes() {
+    local bytes="${1:-0}"
+    awk -v bytes="$bytes" 'BEGIN {
+        split("B KB MB GB TB", units)
+        value = bytes
+        unit = 1
+        while (value >= 1024 && unit < 5) {
+            value = value / 1024
+            unit++
+        }
+        if (unit == 1) {
+            printf "%d%s", value, units[unit]
+        } else {
+            printf "%.1f%s", value, units[unit]
+        }
+    }'
+}
+
+path_size_bytes() {
+    local path="$1"
+    if [[ -e "$path" ]]; then
+        du -sk "$path" 2>/dev/null | awk '{print $1 * 1024}'
+    else
+        echo 0
+    fi
+}
+
+ollama_model_cache_bytes() {
+    path_size_bytes "$HOME/.ollama/models"
+}
+
+available_disk_bytes() {
+    local path="${1:-$HOME}"
+    local bytes
+    bytes=$(df -k "$path" 2>/dev/null | awk 'NR == 2 {print $4 * 1024}')
+    echo "${bytes:-0}"
+}
+
+require_disk_space() {
+    if ! $PULL_MODEL_FILES || [[ $TOTAL_MODEL_BYTES -eq 0 ]]; then
+        return
+    fi
+
+    local available required
+    available=$(available_disk_bytes "$HOME")
+    required=$((TOTAL_MODEL_BYTES + 1024 * 1024 * 1024))
+
+    if [[ -z "$available" || "$available" -le 0 ]] 2>/dev/null; then
+        warn "Could not determine free disk space"
+        return
+    fi
+
+    if [[ "$available" -lt "$required" ]]; then
+        err "Not enough free disk space for ${MODEL_TIER} profile: need at least $(human_bytes "$required"), available $(human_bytes "$available")"
+        exit 1
+    fi
+
+    log "Disk preflight: $(human_bytes "$available") available for ${TOTAL_MODEL_SIZE} model download"
+}
+
+url_reachable() {
+    local url="$1"
+    curl -fsIL --max-time 10 "$url" >/dev/null 2>&1
+}
+
+warn_network_preflight() {
+    if [[ -n "$OFFLINE_BUNDLE" || ! $PULL_MODEL_FILES ]]; then
+        return
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        warn "Network preflight skipped: curl is not available"
+        return
+    fi
+
+    url_reachable "https://ollama.com" || warn "Network preflight: could not reach ollama.com"
+    if $INSTALL_VSCODE; then
+        url_reachable "https://code.visualstudio.com" || warn "Network preflight: could not reach code.visualstudio.com"
+    fi
+}
+
+redact_home() {
+    sed "s#${HOME}#~#g"
 }
 
 configure_homebrew_path() {
@@ -113,14 +201,14 @@ set_model_sizes() {
     EMBED_MODEL_SIZE=$(model_size "$EMBED_MODEL")
 
     case "$MODEL_TIER" in
-        fast)         TOTAL_MODEL_SIZE="~2.2GB" ;;
-        standard)     TOTAL_MODEL_SIZE="~6GB" ;;
-        balanced)     TOTAL_MODEL_SIZE="~6GB" ;;
-        professional) TOTAL_MODEL_SIZE="~11.2GB" ;;
-        agentic)      TOTAL_MODEL_SIZE="~21GB" ;;
-        power)        TOTAL_MODEL_SIZE="~25GB" ;;
-        max)          TOTAL_MODEL_SIZE="~25GB" ;;
-        *)            TOTAL_MODEL_SIZE="varies" ;;
+        fast)         TOTAL_MODEL_SIZE="~2.2GB"; TOTAL_MODEL_BYTES=$((3 * 1024 * 1024 * 1024)) ;;
+        standard)     TOTAL_MODEL_SIZE="~6GB"; TOTAL_MODEL_BYTES=$((7 * 1024 * 1024 * 1024)) ;;
+        balanced)     TOTAL_MODEL_SIZE="~6GB"; TOTAL_MODEL_BYTES=$((7 * 1024 * 1024 * 1024)) ;;
+        professional) TOTAL_MODEL_SIZE="~11.2GB"; TOTAL_MODEL_BYTES=$((13 * 1024 * 1024 * 1024)) ;;
+        agentic)      TOTAL_MODEL_SIZE="~21GB"; TOTAL_MODEL_BYTES=$((24 * 1024 * 1024 * 1024)) ;;
+        power)        TOTAL_MODEL_SIZE="~25GB"; TOTAL_MODEL_BYTES=$((28 * 1024 * 1024 * 1024)) ;;
+        max)          TOTAL_MODEL_SIZE="~25GB"; TOTAL_MODEL_BYTES=$((28 * 1024 * 1024 * 1024)) ;;
+        *)            TOTAL_MODEL_SIZE="varies"; TOTAL_MODEL_BYTES=0 ;;
     esac
 }
 
@@ -562,11 +650,25 @@ collect_doctor_checks() {
     else
         add_doctor_check "continue_telemetry" "Continue telemetry setting" "warn" "not confirmed disabled"
     fi
+
+    local cache_bytes
+    cache_bytes=$(ollama_model_cache_bytes)
+    add_doctor_check "ollama_model_cache" "Ollama model cache" "ok" "$(human_bytes "$cache_bytes") at ~/.ollama/models"
+
+    local available
+    available=$(available_disk_bytes "$HOME")
+    if [[ -n "$available" && "$available" -gt 0 ]] 2>/dev/null; then
+        add_doctor_check "disk_available" "Disk available" "ok" "$(human_bytes "$available")"
+    else
+        add_doctor_check "disk_available" "Disk available" "warn" "could not determine"
+    fi
 }
 
 print_doctor_json() {
-    local checks_json
+    local checks_json cache_bytes available_bytes
     checks_json="$(IFS=,; echo "${DOCTOR_CHECKS[*]}")"
+    cache_bytes=$(ollama_model_cache_bytes)
+    available_bytes=$(available_disk_bytes "$HOME")
 
     cat << JSON
 {
@@ -583,7 +685,15 @@ print_doctor_json() {
   "models": {
     "completion": $(json_quote "$COMPLETION_MODEL"),
     "chat": $(json_quote "$CHAT_MODEL"),
-    "embedding": $(json_quote "$EMBED_MODEL")
+    "embedding": $(json_quote "$EMBED_MODEL"),
+    "cache_bytes": $cache_bytes,
+    "cache_human": $(json_quote "$(human_bytes "$cache_bytes")")
+  },
+  "disk": {
+    "available_bytes": $available_bytes,
+    "available_human": $(json_quote "$(human_bytes "$available_bytes")"),
+    "estimated_model_bytes": $TOTAL_MODEL_BYTES,
+    "estimated_model_human": $(json_quote "$TOTAL_MODEL_SIZE")
   },
   "summary": {
     "failures": $DOCTOR_FAILURES,
@@ -695,6 +805,8 @@ cmd_repair() {
     detect_hardware
     info "Repairing LocalAIbundle installation..."
     echo ""
+    require_disk_space
+    warn_network_preflight
 
     if $INSTALL_OLLAMA; then
         install_ollama
@@ -844,6 +956,52 @@ cmd_validate_config() {
     log "Continue config validation passed"
 }
 
+cmd_issue_report() {
+    header
+    detect_hardware
+
+    local output tmp_dir report_json status_json doctor_json logs_file archive
+    output="${ISSUE_REPORT_OUTPUT:-LocalAIbundle-issue-report-$(timestamp).tar.gz}"
+    tmp_dir=$(mktemp -d)
+
+    report_json="$tmp_dir/install-reports.jsonl"
+    status_json="$tmp_dir/status.json"
+    doctor_json="$tmp_dir/doctor.json"
+    logs_file="$tmp_dir/ollama-server.log"
+
+    info "Collecting redacted issue report..."
+
+    if [[ -d "$REPORT_DIR" ]]; then
+        find "$REPORT_DIR" -name 'install-report-*.json' -type f -print0 2>/dev/null \
+            | while IFS= read -r -d '' file; do
+                redact_home < "$file" >> "$report_json"
+                printf '\n' >> "$report_json"
+            done
+    fi
+    [[ -f "$report_json" ]] || printf '{}\n' > "$report_json"
+
+    JSON_OUTPUT=true cmd_status | redact_home > "$status_json" || true
+    JSON_OUTPUT=true cmd_doctor | redact_home > "$doctor_json" || true
+
+    if [[ -f "$HOME/.ollama/logs/server.log" ]]; then
+        tail -n 300 "$HOME/.ollama/logs/server.log" | redact_home > "$logs_file"
+    else
+        printf 'No Ollama server log found at ~/.ollama/logs/server.log\n' > "$logs_file"
+    fi
+
+    cat > "$tmp_dir/README.txt" << REPORT
+LocalAIbundle issue report
+
+This archive is intended for troubleshooting. Home directory paths are redacted to "~".
+Review contents before sharing.
+REPORT
+
+    archive="$output"
+    tar -C "$tmp_dir" -czf "$archive" .
+    rm -rf "$tmp_dir"
+    log "Issue report created: $archive"
+}
+
 cmd_test() {
     header
     detect_hardware
@@ -978,6 +1136,8 @@ cmd_self_test() {
     [[ -f "$root/tests/install-sandbox.sh" ]] && shell_files+=("$root/tests/install-sandbox.sh")
     [[ -f "$root/scripts/package-release.sh" ]] && shell_files+=("$root/scripts/package-release.sh")
     [[ -f "$root/scripts/package-pkg.sh" ]] && shell_files+=("$root/scripts/package-pkg.sh")
+    [[ -f "$root/scripts/package-dmg.sh" ]] && shell_files+=("$root/scripts/package-dmg.sh")
+    [[ -f "$root/scripts/notarize-artifact.sh" ]] && shell_files+=("$root/scripts/notarize-artifact.sh")
     [[ -f "$root/scripts/notarize-pkg.sh" ]] && shell_files+=("$root/scripts/notarize-pkg.sh")
     [[ -f "$root/scripts/demo.sh" ]] && shell_files+=("$root/scripts/demo.sh")
     [[ -f "$root/scripts/docker-test.sh" ]] && shell_files+=("$root/scripts/docker-test.sh")
@@ -1334,7 +1494,7 @@ print_summary() {
 # ─── Status Command ───────────────────────────────────────────────────────────
 
 cmd_status_json() {
-    local ollama_bin ollama_cli ollama_server vscode_cli continue_extension continue_config telemetry_disabled models_json
+    local ollama_bin ollama_cli ollama_server vscode_cli continue_extension continue_config telemetry_disabled models_json cache_bytes available_bytes
 
     ollama_bin=$(resolve_ollama_binary 2>/dev/null || true)
     [[ -n "$ollama_bin" ]] && ollama_cli=true || ollama_cli=false
@@ -1343,6 +1503,8 @@ cmd_status_json() {
     code --list-extensions 2>/dev/null | grep -qi "continue" && continue_extension=true || continue_extension=false
     [[ -f "$HOME/.continue/config.yaml" ]] && continue_config=true || continue_config=false
     continue_telemetry_disabled && telemetry_disabled=true || telemetry_disabled=false
+    cache_bytes=$(ollama_model_cache_bytes)
+    available_bytes=$(available_disk_bytes "$HOME")
 
     models_json="[]"
     if [[ -n "$ollama_bin" ]]; then
@@ -1357,7 +1519,9 @@ cmd_status_json() {
     "cli_installed": $ollama_cli,
     "binary": $(json_quote "$ollama_bin"),
     "server_running": $ollama_server,
-    "models": $models_json
+    "models": $models_json,
+    "model_cache_bytes": $cache_bytes,
+    "model_cache_human": $(json_quote "$(human_bytes "$cache_bytes")")
   },
   "vscode": {
     "cli_installed": $vscode_cli,
@@ -1367,6 +1531,10 @@ cmd_status_json() {
   "continue": {
     "config_exists": $continue_config,
     "config_path": $(json_quote "$HOME/.continue/config.yaml")
+  },
+  "disk": {
+    "available_bytes": $available_bytes,
+    "available_human": $(json_quote "$(human_bytes "$available_bytes")")
   }
 }
 JSON
@@ -1421,6 +1589,10 @@ cmd_status() {
     else
         warn "Continue config: not found"
     fi
+
+    echo ""
+    log "Ollama model cache: $(human_bytes "$(ollama_model_cache_bytes)") at ~/.ollama/models"
+    log "Disk available: $(human_bytes "$(available_disk_bytes "$HOME")")"
 }
 
 # ─── Uninstall Command ────────────────────────────────────────────────────────
@@ -1436,7 +1608,11 @@ cmd_uninstall() {
     fi
     echo "    - Ollama LaunchAgent (auto-start)"
     echo "    - Continue.dev VS Code extension"
-    echo "    - Continue.dev configuration"
+    if $PRESERVE_CONFIG; then
+        echo "    - Continue.dev configuration: preserved because --preserve-config was set"
+    else
+        echo "    - Continue.dev configuration"
+    fi
     echo ""
     read -p "Are you sure? (y/N) " -n 1 -r
     echo ""
@@ -1449,8 +1625,12 @@ cmd_uninstall() {
     info "Removing Continue.dev extension..."
     code --uninstall-extension Continue.continue 2>/dev/null || true
 
-    info "Removing Continue.dev config..."
-    rm -rf "$HOME/.continue"
+    if $PRESERVE_CONFIG; then
+        info "Preserving Continue.dev config at $HOME/.continue"
+    else
+        info "Removing Continue.dev config..."
+        rm -rf "$HOME/.continue"
+    fi
 
     info "Stopping Ollama..."
     pkill -f "ollama" 2>/dev/null || true
@@ -1487,6 +1667,8 @@ cmd_uninstall() {
 main() {
     header
     detect_hardware
+    require_disk_space
+    warn_network_preflight
 
     echo ""
     echo -e "${BOLD}━━━ Installing Components ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -1583,6 +1765,7 @@ usage() {
     echo "  status        Check current installation status"
     echo "  test          Run inference smoke tests (speed + correctness)"
     echo "  self-test     Run non-mutating installer/release checks"
+    echo "  issue-report  Create a redacted troubleshooting archive"
     echo "  validate-config Validate the generated Continue config"
     echo "  bundle        Create an offline bundle from this repo and local model cache"
     echo "  uninstall     Remove all components"
@@ -1613,8 +1796,10 @@ usage() {
     echo "  --no-model-pull              Skip model downloads"
     echo "  --offline <bundle.tgz>       Import model cache from an offline bundle"
     echo "  --output <bundle.tgz>        Output path for the bundle command"
+    echo "  --issue-output <file.tgz>    Output path for the issue-report command"
     echo "  --report-dir <dir>           Directory for install reports"
     echo "  --preserve-models            Keep ~/.ollama during uninstall"
+    echo "  --preserve-config            Keep ~/.continue during uninstall"
 }
 
 require_arg() {
@@ -1631,7 +1816,7 @@ parse_args() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            install|doctor|repair|status|test|self-test|validate-config|bundle|uninstall)
+            install|doctor|repair|status|test|self-test|issue-report|validate-config|bundle|uninstall)
                 CMD="$1"
                 shift
                 ;;
@@ -1737,6 +1922,15 @@ parse_args() {
                 BUNDLE_OUTPUT="${1#*=}"
                 shift
                 ;;
+            --issue-output)
+                require_arg "$1" "${2:-}"
+                ISSUE_REPORT_OUTPUT="$2"
+                shift 2
+                ;;
+            --issue-output=*)
+                ISSUE_REPORT_OUTPUT="${1#*=}"
+                shift
+                ;;
             --report-dir)
                 require_arg "$1" "${2:-}"
                 REPORT_DIR="$2"
@@ -1748,6 +1942,10 @@ parse_args() {
                 ;;
             --preserve-models)
                 PRESERVE_MODELS=true
+                shift
+                ;;
+            --preserve-config)
+                PRESERVE_CONFIG=true
                 shift
                 ;;
             --help|-h)
@@ -1775,6 +1973,7 @@ dispatch() {
         status)    cmd_status ;;
         test)      cmd_test ;;
         self-test) cmd_self_test ;;
+        issue-report) cmd_issue_report ;;
         validate-config) cmd_validate_config ;;
         bundle)    cmd_bundle ;;
         uninstall) cmd_uninstall ;;

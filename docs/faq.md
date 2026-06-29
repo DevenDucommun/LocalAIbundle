@@ -26,6 +26,12 @@ The default automatic profile depends on RAM. Expect roughly 6GB for 16GB machin
 
 The installer backs up `~/.continue/config.yaml` before writing a new config. Backups are timestamped as `config.yaml.bak.<timestamp>`.
 
+During uninstall, preserve Continue config with:
+
+```bash
+./install.sh uninstall --preserve-config
+```
+
 ## Does uninstall remove VS Code?
 
 No. `./install.sh uninstall` removes LocalAIbundle-managed pieces: Ollama app, models unless preserved, LaunchAgent, Continue extension, and Continue config. It does not remove VS Code itself.
@@ -36,6 +42,12 @@ Yes:
 
 ```bash
 ./install.sh uninstall --preserve-models
+```
+
+You can combine preserve flags:
+
+```bash
+./install.sh uninstall --preserve-models --preserve-config
 ```
 
 ## Is there a Homebrew package?
