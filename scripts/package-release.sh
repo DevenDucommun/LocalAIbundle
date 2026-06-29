@@ -34,15 +34,28 @@ mkdir -p "$TMP_DIR/$PKG_NAME"
 )
 
 find "$TMP_DIR/$PKG_NAME" -exec touch -t 202001010000 {} +
-tar \
-    --format ustar \
-    --uid 0 \
-    --gid 0 \
-    --uname root \
-    --gname wheel \
-    -C "$TMP_DIR" \
-    -cf "$TMP_DIR/${PKG_NAME}.tar" \
-    "$PKG_NAME"
+if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+    tar \
+        --format ustar \
+        --sort=name \
+        --mtime='2020-01-01 00:00Z' \
+        --owner=0 \
+        --group=0 \
+        --numeric-owner \
+        -C "$TMP_DIR" \
+        -cf "$TMP_DIR/${PKG_NAME}.tar" \
+        "$PKG_NAME"
+else
+    tar \
+        --format ustar \
+        --uid 0 \
+        --gid 0 \
+        --uname root \
+        --gname wheel \
+        -C "$TMP_DIR" \
+        -cf "$TMP_DIR/${PKG_NAME}.tar" \
+        "$PKG_NAME"
+fi
 gzip -n -c "$TMP_DIR/${PKG_NAME}.tar" > "$PKG_PATH"
 
 if command -v shasum >/dev/null 2>&1; then
