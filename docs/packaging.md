@@ -66,7 +66,7 @@ After signing, notarize and staple:
 
 ```bash
 NOTARY_PROFILE=localaibundle-notary \
-bash scripts/notarize-pkg.sh dist/LocalAIbundle-<version>.pkg
+bash scripts/notarize-artifact.sh dist/LocalAIbundle-<version>.pkg
 ```
 
 You can also use environment variables instead of a Keychain profile:
@@ -75,7 +75,7 @@ You can also use environment variables instead of a Keychain profile:
 APPLE_ID="you@example.com" \
 APPLE_TEAM_ID="TEAMID" \
 APPLE_APP_PASSWORD="app-specific-password" \
-bash scripts/notarize-pkg.sh dist/LocalAIbundle-<version>.pkg
+bash scripts/notarize-artifact.sh dist/LocalAIbundle-<version>.pkg
 ```
 
 Verify:
@@ -83,6 +83,34 @@ Verify:
 ```bash
 spctl --assess --type install dist/LocalAIbundle-<version>.pkg
 pkgutil --check-signature dist/LocalAIbundle-<version>.pkg
+```
+
+## DMG
+
+Build a DMG containing the package installer:
+
+```bash
+bash scripts/package-dmg.sh
+```
+
+Outputs:
+
+- `dist/LocalAIbundle-<version>.dmg`
+- `dist/LocalAIbundle-<version>.dmg.sha256`
+
+The DMG is a distribution container. The `.pkg` inside remains the actual installer. For public release, build the final signed and notarized `.pkg`, then build the DMG from that final package.
+
+Verify the DMG:
+
+```bash
+hdiutil verify dist/LocalAIbundle-<version>.dmg
+```
+
+For the final public DMG, notarize and staple the DMG too:
+
+```bash
+NOTARY_PROFILE=localaibundle-notary \
+bash scripts/notarize-artifact.sh dist/LocalAIbundle-<version>.dmg
 ```
 
 ## Docker Checks

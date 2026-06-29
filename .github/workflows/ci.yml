@@ -21,7 +21,7 @@ jobs:
         run: bash -n install.sh
 
       - name: ShellCheck
-        run: shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
+        run: shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/package-dmg.sh scripts/notarize-artifact.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
 
       - name: Python syntax
         run: python3 -m py_compile scripts/*.py

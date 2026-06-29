@@ -199,6 +199,9 @@ cp packaging/homebrew/localaibundle.rb /path/to/homebrew-localai/Formula/
 
 # Native macOS package, unsigned unless SIGN_IDENTITY is set
 bash scripts/package-pkg.sh
+
+# DMG containing the package installer
+bash scripts/package-dmg.sh
 ```
 
 Homebrew tap instructions should be published only after the tap exists and its formula passes `brew test`.

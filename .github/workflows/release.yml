@@ -23,7 +23,7 @@ jobs:
       - name: Validate
         run: |
           bash -n install.sh
-          shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
+          shellcheck install.sh bin/localaibundle tests/run.sh tests/install-sandbox.sh scripts/package-release.sh scripts/package-pkg.sh scripts/package-dmg.sh scripts/notarize-artifact.sh scripts/notarize-pkg.sh scripts/demo.sh scripts/docker-test.sh
           python3 -m py_compile scripts/*.py
           bash tests/run.sh
           bash tests/install-sandbox.sh
