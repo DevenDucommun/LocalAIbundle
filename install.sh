@@ -5,7 +5,7 @@ set -euo pipefail
 # Installs Ollama, code models, Continue.dev, and configures everything
 # Zero cloud dependencies. All inference stays on your machine.
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 DRY_RUN=false
 JSON_OUTPUT=false
 SELF_TEST_NO_NETWORK=false

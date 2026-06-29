@@ -22,21 +22,11 @@ case "$ARTIFACT_PATH" in
         ;;
 esac
 
-if [[ -n "${NOTARY_PROFILE:-}" ]]; then
-    xcrun notarytool submit "$ARTIFACT_PATH" \
-        --keychain-profile "$NOTARY_PROFILE" \
-        --wait
-else
-    : "${APPLE_ID:?Set APPLE_ID or NOTARY_PROFILE}"
-    : "${APPLE_TEAM_ID:?Set APPLE_TEAM_ID or NOTARY_PROFILE}"
-    : "${APPLE_APP_PASSWORD:?Set APPLE_APP_PASSWORD or NOTARY_PROFILE}"
+: "${NOTARY_PROFILE:?Set NOTARY_PROFILE. Create one with: xcrun notarytool store-credentials localaibundle-notary}"
 
-    xcrun notarytool submit "$ARTIFACT_PATH" \
-        --apple-id "$APPLE_ID" \
-        --team-id "$APPLE_TEAM_ID" \
-        --password "$APPLE_APP_PASSWORD" \
-        --wait
-fi
+xcrun notarytool submit "$ARTIFACT_PATH" \
+    --keychain-profile "$NOTARY_PROFILE" \
+    --wait
 
 xcrun stapler staple "$ARTIFACT_PATH"
 spctl --assess --type "$SPCTL_TYPE" "$ARTIFACT_PATH"

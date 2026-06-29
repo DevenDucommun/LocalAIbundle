@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.1.0 - Unreleased
+## 1.1.1 - Unreleased
+
+### Fixed
+
+- Made release tarball packaging work on both macOS BSD tar and Linux GNU tar.
+- Removed credential environment variable fallback from notarization helper to avoid secret-scanner false positives.
+
+## 1.1.0
 
 ### Added
 

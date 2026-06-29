@@ -69,15 +69,6 @@ NOTARY_PROFILE=localaibundle-notary \
 bash scripts/notarize-artifact.sh dist/LocalAIbundle-<version>.pkg
 ```
 
-You can also use environment variables instead of a Keychain profile:
-
-```bash
-APPLE_ID="you@example.com" \
-APPLE_TEAM_ID="TEAMID" \
-APPLE_APP_PASSWORD="app-specific-password" \
-bash scripts/notarize-artifact.sh dist/LocalAIbundle-<version>.pkg
-```
-
 Verify:
 
 ```bash
