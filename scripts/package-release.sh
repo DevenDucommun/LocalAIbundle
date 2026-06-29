@@ -21,6 +21,7 @@ mkdir -p "$TMP_DIR/$PKG_NAME"
         --exclude='./.git' \
         --exclude='./dist' \
         --exclude='./docs/roadmap-local.md' \
+        --exclude='./packaging/homebrew' \
         --exclude='./__pycache__' \
         --exclude='./*/__pycache__' \
         --exclude='./*.pyc' \
