@@ -28,8 +28,11 @@ mkdir -p "$INSTALL_ROOT" "$BIN_DIR" "$DIST_DIR"
         --exclude='./*/__pycache__' \
         --exclude='./*.pyc' \
         --exclude='./*/*.pyc' \
+        --exclude='./*.tgz' \
         --exclude='./*.tar.gz' \
         --exclude='./*.pkg' \
+        --exclude='./*.dmg' \
+        --exclude='./*.sha256' \
         -cf - .
 ) | (
     cd "$INSTALL_ROOT"
