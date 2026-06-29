@@ -33,7 +33,17 @@ mkdir -p "$TMP_DIR/$PKG_NAME"
     tar -xf -
 )
 
-tar -C "$TMP_DIR" -czf "$PKG_PATH" "$PKG_NAME"
+find "$TMP_DIR/$PKG_NAME" -exec touch -t 202001010000 {} +
+tar \
+    --format ustar \
+    --uid 0 \
+    --gid 0 \
+    --uname root \
+    --gname wheel \
+    -C "$TMP_DIR" \
+    -cf "$TMP_DIR/${PKG_NAME}.tar" \
+    "$PKG_NAME"
+gzip -n -c "$TMP_DIR/${PKG_NAME}.tar" > "$PKG_PATH"
 
 if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$PKG_PATH" > "$PKG_PATH.sha256"
