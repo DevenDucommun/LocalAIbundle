@@ -7,6 +7,8 @@ LocalAIbundle installs and maintains a fully local AI coding stack for macOS App
 
 **Your code stays on your machine.**
 
+![LocalAIbundle install preview (dry run)](docs/assets/dry-run-demo.png)
+
 ## What It Provides
 
 | Capability | Details |
