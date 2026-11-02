@@ -20,7 +20,7 @@ Then import that bundle on another Mac:
 
 ## How much disk space do models use?
 
-The default automatic profile depends on RAM. Expect roughly 6GB for 16GB machines, 11GB for 24-32GB machines, and 25GB for 48GB+ machines. Run `./install.sh --dry-run` to see the selected profile and estimate before installing.
+The default automatic profile depends on RAM. Expect roughly 6GB for 16GB machines, 11GB for 24-47GB machines, 29GB for 48-95GB machines, and 57GB for 96GB+ machines. Run `./install.sh --dry-run` to see the selected profile and estimate before installing.
 
 ## Can I keep my existing Continue config?
 

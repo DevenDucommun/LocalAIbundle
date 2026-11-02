@@ -5,7 +5,7 @@ set -euo pipefail
 # Installs Ollama, code models, Continue.dev, and configures everything
 # Zero cloud dependencies. All inference stays on your machine.
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 DRY_RUN=false
 JSON_OUTPUT=false
 SELF_TEST_NO_NETWORK=false
@@ -199,6 +199,10 @@ model_size() {
         qwen2.5-coder:14b)  echo "~9GB" ;;
         qwen2.5-coder:32b)  echo "~20GB" ;;
         qwen3-coder:30b)    echo "~19GB" ;;
+        qwen3.6:27b-coding) echo "~19GB" ;;
+        qwen3.6:35b-a3b-coding) echo "~24GB" ;;
+        qwen3-coder-next|qwen3-coder-next:latest) echo "~52GB" ;;
+        devstral-small-2:24b) echo "~15GB" ;;
         nomic-embed-text)   echo "~274MB" ;;
         *)                  echo "size varies" ;;
     esac
@@ -215,8 +219,8 @@ set_model_sizes() {
         balanced)     TOTAL_MODEL_SIZE="~6GB"; TOTAL_MODEL_BYTES=$((7 * 1024 * 1024 * 1024)) ;;
         professional) TOTAL_MODEL_SIZE="~11.2GB"; TOTAL_MODEL_BYTES=$((13 * 1024 * 1024 * 1024)) ;;
         agentic)      TOTAL_MODEL_SIZE="~21GB"; TOTAL_MODEL_BYTES=$((24 * 1024 * 1024 * 1024)) ;;
-        power)        TOTAL_MODEL_SIZE="~25GB"; TOTAL_MODEL_BYTES=$((28 * 1024 * 1024 * 1024)) ;;
-        max)          TOTAL_MODEL_SIZE="~25GB"; TOTAL_MODEL_BYTES=$((28 * 1024 * 1024 * 1024)) ;;
+        power)        TOTAL_MODEL_SIZE="~29GB"; TOTAL_MODEL_BYTES=$((32 * 1024 * 1024 * 1024)) ;;
+        max)          TOTAL_MODEL_SIZE="~57GB"; TOTAL_MODEL_BYTES=$((60 * 1024 * 1024 * 1024)) ;;
         *)            TOTAL_MODEL_SIZE="varies"; TOTAL_MODEL_BYTES=0 ;;
     esac
 }
@@ -224,11 +228,16 @@ set_model_sizes() {
 apply_profile() {
     case "$PROFILE" in
         auto)
-            if [[ $RAM_GB -ge 48 ]]; then
+            if [[ $RAM_GB -ge 96 ]]; then
+                MODEL_TIER="max"
+                COMPLETION_MODEL="qwen2.5-coder:7b"
+                CHAT_MODEL="qwen3-coder-next"
+                info "Tier: MAX — 7B completion + Qwen3-Coder-Next chat (80B MoE)"
+            elif [[ $RAM_GB -ge 48 ]]; then
                 MODEL_TIER="power"
                 COMPLETION_MODEL="qwen2.5-coder:7b"
-                CHAT_MODEL="qwen2.5-coder:32b"
-                info "Tier: POWER — 7B completion + 32B chat (near GPT-4o quality)"
+                CHAT_MODEL="qwen3.6:35b-a3b-coding"
+                info "Tier: POWER — 7B completion + Qwen3.6 35B-A3B coding chat (MoE)"
             elif [[ $RAM_GB -ge 24 ]]; then
                 MODEL_TIER="professional"
                 COMPLETION_MODEL="qwen2.5-coder:3b"
@@ -265,11 +274,17 @@ apply_profile() {
             CHAT_MODEL="qwen3-coder:30b"
             info "Profile: AGENTIC — long-context coding model for larger tasks"
             ;;
+        power)
+            MODEL_TIER="power"
+            COMPLETION_MODEL="qwen2.5-coder:7b"
+            CHAT_MODEL="qwen3.6:35b-a3b-coding"
+            info "Profile: POWER — Qwen3.6 35B-A3B coding chat for 48GB+ machines"
+            ;;
         max)
             MODEL_TIER="max"
             COMPLETION_MODEL="qwen2.5-coder:7b"
-            CHAT_MODEL="qwen2.5-coder:32b"
-            info "Profile: MAX — largest Qwen2.5-Coder tier"
+            CHAT_MODEL="qwen3-coder-next"
+            info "Profile: MAX — Qwen3-Coder-Next (80B MoE) for 96GB+ machines"
             ;;
         *)
             err "Unknown profile: $PROFILE"
@@ -1350,12 +1365,30 @@ disable_continue_telemetry() {
     fi
 }
 
+# Chat models known to support tool calling in Ollama. Continue needs an explicit
+# capabilities hint for Agent mode when it cannot autodetect newer model names.
+chat_model_supports_tools() {
+    case "$1" in
+        qwen3-coder*|qwen3.6*|devstral*|gpt-oss*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+chat_capabilities_yaml() {
+    if chat_model_supports_tools "$1"; then
+        printf '    capabilities:\n      - tool_use\n'
+    fi
+}
+
 configure_continue() {
     CONTINUE_DIR="$HOME/.continue"
 
     if $DRY_RUN; then
         dry "write Continue.dev config to $CONTINUE_DIR/config.yaml"
         dry "  chat model: ${CHAT_MODEL}"
+        if chat_model_supports_tools "$CHAT_MODEL"; then
+            dry "  agent mode: enabled (tool_use capability)"
+        fi
         dry "  completion model: ${COMPLETION_MODEL}"
         dry "  embedding model: ${EMBED_MODEL}"
         dry "  telemetry: disabled (VS Code setting)"
@@ -1380,6 +1413,7 @@ models:
     provider: ollama
     model: ${CHAT_MODEL}
     apiBase: http://localhost:11434
+$(chat_capabilities_yaml "$CHAT_MODEL")
     roles:
       - chat
       - edit
@@ -1832,7 +1866,8 @@ usage() {
     echo "  balanced      Responsive 16GB+ stack"
     echo "  professional  Larger daily-development stack"
     echo "  agentic       Long-context coding model for larger tasks"
-    echo "  max           Largest Qwen2.5-Coder tier"
+    echo "  power         Qwen3.6 35B-A3B coding chat (48GB+)"
+    echo "  max           Qwen3-Coder-Next 80B MoE chat (96GB+)"
     echo ""
     echo "Flags:"
     echo "  --dry-run                    Show planned actions without making changes"

@@ -42,7 +42,13 @@ test_auto_profiles() {
     assert_eq "professional|qwen2.5-coder:3b|qwen2.5-coder:14b|~11.2GB" "$output" "auto profile selects professional on 32GB"
 
     output=$(LOCALAIBUNDLE_TEST_RAM_GB=64 run_sourced 'detect_hardware >/dev/null; printf "%s|%s|%s|%s" "$MODEL_TIER" "$COMPLETION_MODEL" "$CHAT_MODEL" "$TOTAL_MODEL_SIZE"')
-    assert_eq "power|qwen2.5-coder:7b|qwen2.5-coder:32b|~25GB" "$output" "auto profile selects power on 64GB"
+    assert_eq "power|qwen2.5-coder:7b|qwen3.6:35b-a3b-coding|~29GB" "$output" "auto profile selects power on 64GB"
+
+    output=$(LOCALAIBUNDLE_TEST_RAM_GB=128 run_sourced 'detect_hardware >/dev/null; printf "%s|%s|%s|%s" "$MODEL_TIER" "$COMPLETION_MODEL" "$CHAT_MODEL" "$TOTAL_MODEL_SIZE"')
+    assert_eq "max|qwen2.5-coder:7b|qwen3-coder-next|~57GB" "$output" "auto profile selects max on 128GB"
+
+    output=$(LOCALAIBUNDLE_TEST_RAM_GB=64 run_sourced 'PROFILE=power; detect_hardware >/dev/null; printf "%s|%s" "$MODEL_TIER" "$CHAT_MODEL"')
+    assert_eq "power|qwen3.6:35b-a3b-coding" "$output" "explicit power profile selects Qwen3.6 coding chat"
 
     output=$(run_sourced 'sysctl() { return 1; }; detect_hardware >/dev/null; printf "%s|%s|%s" "$RAM_GB" "$MODEL_TIER" "$TOTAL_MODEL_SIZE"')
     assert_eq "16|standard|~6GB" "$output" "hardware detection falls back to standard profile when RAM is unavailable"
@@ -89,8 +95,25 @@ test_continue_config_generation() {
             "$?"
     ')
 
-    rm -rf "$tmp_home"
     assert_eq "1|1|1|1|1|0" "$output" "configure_continue writes valid v1 config, disables telemetry, and backs up existing config"
+
+    output=$(HOME="$tmp_home" run_sourced '
+        printf "%s" "$(grep -c "tool_use" "$HOME/.continue/config.yaml")"
+    ' || true)
+    assert_eq "0" "$output" "configure_continue omits tool_use for models without tool support"
+
+    output=$(HOME="$tmp_home" LOCALAIBUNDLE_TEST_RAM_GB=64 run_sourced '
+        detect_hardware >/dev/null
+        configure_continue >/dev/null
+        validate_continue_config "$HOME/.continue/config.yaml"
+        printf "%s|%s|%s" \
+            "$(grep -c "model: qwen3.6:35b-a3b-coding" "$HOME/.continue/config.yaml")" \
+            "$(grep -c "^      - tool_use$" "$HOME/.continue/config.yaml")" \
+            "$?"
+    ')
+
+    rm -rf "$tmp_home"
+    assert_eq "1|1|0" "$output" "configure_continue enables agent tool_use for tool-capable chat models"
 }
 
 test_helper_resolution() {

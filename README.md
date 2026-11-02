@@ -70,7 +70,8 @@ The default `auto` profile selects models by RAM. You can also choose a profile 
 | `balanced` | `qwen2.5-coder:1.5b` | `qwen2.5-coder:7b` | 16GB machines |
 | `professional` | `qwen2.5-coder:3b` | `qwen2.5-coder:14b` | Daily coding on 24GB+ |
 | `agentic` | `qwen2.5-coder:3b` | `qwen3-coder:30b` | Larger coding tasks and long-context work |
-| `max` | `qwen2.5-coder:7b` | `qwen2.5-coder:32b` | High-memory machines |
+| `power` | `qwen2.5-coder:7b` | `qwen3.6:35b-a3b-coding` | 48GB+ machines; fast MoE chat with agent tools |
+| `max` | `qwen2.5-coder:7b` | `qwen3-coder-next` | 96GB+ machines; strongest local coding model |
 
 Automatic RAM tiers:
 
@@ -78,7 +79,10 @@ Automatic RAM tiers:
 |-----|------------|-----------|
 | 16-23GB | `qwen2.5-coder:1.5b` | `qwen2.5-coder:7b` |
 | 24-47GB | `qwen2.5-coder:3b` | `qwen2.5-coder:14b` |
-| 48GB+ | `qwen2.5-coder:7b` | `qwen2.5-coder:32b` |
+| 48-95GB | `qwen2.5-coder:7b` | `qwen3.6:35b-a3b-coding` |
+| 96GB+ | `qwen2.5-coder:7b` | `qwen3-coder-next` |
+
+Autocomplete stays on Qwen2.5-Coder because it supports fill-in-the-middle completion, which the newer chat models do not advertise. Tool-capable chat models (`qwen3-coder`, `qwen3.6`, `devstral`, `gpt-oss`) get `capabilities: [tool_use]` in the Continue config so Agent mode works out of the box.
 
 Example overrides:
 

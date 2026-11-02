@@ -8,7 +8,10 @@ Use `auto` unless you already know which model sizes your Mac can handle. LocalA
 | `balanced` | 16GB+ | ~6GB | General coding with responsive chat |
 | `professional` | 24GB+ | ~11.2GB | Daily development, refactoring, explanations |
 | `agentic` | 32GB+ | ~21GB | Larger tasks and long-context coding |
-| `max` | 48GB+ | ~25GB | High-memory machines where quality matters more than download size |
+| `power` | 48GB+ | ~29GB | Qwen3.6 35B-A3B coding chat: mixture-of-experts, so large-model quality at small-model speed |
+| `max` | 96GB+ | ~57GB | Qwen3-Coder-Next (80B MoE) for workstations where quality matters more than download size |
+
+`agentic`, `power`, and `max` use tool-capable chat models, and the generated Continue config enables Agent mode (`tool_use`) for them.
 
 Preview your selection:
 
